@@ -53,8 +53,16 @@ No third-party dependencies — standard-library Python 3 only.
 
 ## Input schema (`cowork_sessions.json`)
 
-The skill harvests Cowork session workspaces from OneDrive
-(`Documents/Cowork/sessions/<uuid>/input` and `/output`) and writes this:
+The skill harvests Cowork session workspaces from OneDrive — scanning **all three artifact
+roots** under `Documents/Cowork/`, each with `input/` and `output/` subfolders:
+
+| Root | Holds |
+|---|---|
+| `Documents/Cowork/sessions/<uuid>/` | Interactive sessions (UUID-named) |
+| `Documents/Cowork/Tasks/<task-id>/` | Runs of **scheduled tasks** |
+| `Documents/Cowork/<slug>/` | Sessions stored **directly** under Cowork, named with the task-name slug (not a UUID). The reserved folders `auth`, `sessions`, `skills`, `Tasks` are skipped. |
+
+After de-duplicating by folder id and filtering to the window, it writes this:
 
 ```jsonc
 {
@@ -159,3 +167,10 @@ in the report's Glossary and in `build_report.py`.
 - Categories with **no saved artifacts** in the window are reported as **zero**, keeping totals a
   conservative floor.
 - Counting stays conservative: ~2 run tasks per session; supporting files folded into the primary task.
+- **Chat-only sessions are invisible (known limitation).** Daily briefings, inbox triage, quick
+  lookups and other conversational sessions that save no file leave **no trace in OneDrive** —
+  nothing is written to `sessions/`, `Tasks/`, or a direct slug folder. They therefore can't be
+  counted from artifacts, so **the speed multiplier and value are a conservative baseline** that
+  reflects only artifact-producing/consuming work. The `mine_session.py` telemetry path
+  (`_telemetry.jsonl`) is the forward fix: as it accumulates measured run-time and tool-intensity
+  records, future reports can include chat-only sessions and tighten the multiplier.
