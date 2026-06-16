@@ -20,6 +20,25 @@ Inspired by [microsoft/What-I-Did-Copilot](https://github.com/microsoft/What-I-D
 
 ---
 
+## Download
+
+| Version | File | Status |
+|---|---|---|
+| **v5.2** | [`cowork-roi-report-skill-v5.2-latest.zip`](cowork-roi-report-skill-v5.2-latest.zip) | ✅ **Latest version** — recommended |
+| v5.1 | [`cowork-roi-report-skill-v5.1-previous.zip`](cowork-roi-report-skill-v5.1-previous.zip) | Previous version (kept for reference) |
+
+### What's new in v5.2
+
+The harvest step now sweeps **all three OneDrive artifact roots** instead of only `sessions/`, so it no longer undercounts your work:
+
+1. **`Documents/Cowork/sessions/<uuid>/`** — interactive sessions (UUID-named)
+2. **`Documents/Cowork/Tasks/<task-id>/`** — runs of **scheduled tasks** (previously missed)
+3. **`Documents/Cowork/<slug>/`** — sessions stored **directly** under the Cowork folder using the task-name slug (previously missed); reserved system folders `auth`, `sessions`, `skills`, `Tasks` are skipped
+
+Each root is paginated and results are de-duplicated by folder id. v5.2 also documents the **chat-only limitation**: sessions that save no file leave no OneDrive trace, so the speed multiplier is a conservative baseline. The classify/compute/render scripts are unchanged. See [`skill/CHANGELOG-v5.md`](skill/CHANGELOG-v5.md) for full details.
+
+---
+
 ## Report Highlights
 
 ### Speed Multiplier & Value
@@ -50,7 +69,7 @@ See where your time went across 8 task categories, plus a breakdown of what you 
 
 ### Option 1 — Let Cowork install it for you (easiest)
 
-1. **Download** the [`cowork-roi-report-skill.zip`](https://github.com/Fepilot/What-Cowork-did-for-me/releases/latest/download/cowork-roi-report-skill.zip) from the latest release
+1. **Download** the latest version: [`cowork-roi-report-skill-v5.2-latest.zip`](cowork-roi-report-skill-v5.2-latest.zip)
 2. **Open** [Copilot Cowork](https://copilot.cloud.microsoft/cowork)
 3. **Attach** the zip file to the chat and send this prompt:
 
@@ -61,7 +80,7 @@ See where your time went across 8 task categories, plus a breakdown of what you 
 
 ### Option 2 — Manual install
 
-1. **Download** the [`cowork-roi-report-skill.zip`](https://github.com/Fepilot/What-Cowork-did-for-me/releases/latest/download/cowork-roi-report-skill.zip) from the latest release
+1. **Download** the latest version: [`cowork-roi-report-skill-v5.2-latest.zip`](cowork-roi-report-skill-v5.2-latest.zip)
 2. **Extract** the zip
 3. **Copy** the `cowork-roi-report-skill/` folder to your Cowork skills directory:
    ```
