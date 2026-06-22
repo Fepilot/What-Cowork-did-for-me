@@ -6,7 +6,8 @@ description: |
   multiplier and a professional-services-equivalent value using research-anchored task-category bands plus an
   artifact-scaled two-clock model. The report has a live hourly-rate control, a Download-PDF button,
   an expandable Glossary with clickable research sources, KPIs, a category breakdown, an
-  analyzed-vs-produced (inputs/outputs) breakdown, skills-augmented, goals & leverage, and an activity heatmap.
+  analyzed-vs-produced (inputs/outputs) breakdown, a Credits &amp; ROI section (Copilot-credit cost per task plus
+  return on spend), skills-augmented, work-by-business-process table, and an activity heatmap.
   Inspired by microsoft/What-I-Did-Copilot, adapted for Copilot Cowork.
 
   Use when the user asks for "my Cowork ROI", "what Cowork did for me", "Cowork impact report",
@@ -18,7 +19,7 @@ description: |
   Do NOT use for: GitHub Copilot / IDE reports, team-wide announcements, single-meeting summaries,
   or daily briefings.
 cowork:
-  category: analytics
+  category: analysis
   icon: BarChart4
 ---
 
@@ -45,7 +46,7 @@ This skill is generic — it works for **any** signed-in user. No data is hard-c
 ## Inputs & defaults
 - **Period:** the user picks **7, 15 or 30 days** (asked at the start). Window = period ago 00:00 → today 23:59, user's local time zone.
 - **Hourly rate:** default **$72/hr** (blended professional-services rate; also editable live inside the report).
-- **Copilot seat cost:** *not used in v5* — the report shows a speed multiplier + professional-services value, not an ROI ratio (credit/seat data isn't available).
+- **Copilot credit price:** default **$0.01/credit** (pay-as-you-go list price; override via `meta.credit_price`). Drives the credit-cost and ROI figures.
 - **Default email recipient:** the signed-in user themselves.
 
 ---
@@ -65,20 +66,20 @@ Do not proceed to scheduling until the user has explicitly chosen the automate o
 - Compute `after` = N days ago at 00:00 local; `before` = today 23:59 local; set `window.label` = "Last N days", `window.months` = N/30 rounded (legacy field; v5 does not use seat cost).
 
 ### 3. Harvest the user's Cowork sessions (the data source)
-Cowork saves each session's workspace to OneDrive with `input/` (files brought in) and `output/`
-(deliverables produced) subfolders. There is no chat transcript in OneDrive — the artifacts are the signal.
+Cowork saves each session's workspace to OneDrive under **`Documentos/Cowork/sessions/<session-uuid>/`**, with
+`input/` (files brought in) and `output/` (deliverables produced) subfolders. There is no chat transcript in
+OneDrive — the artifacts are the signal.
 - `GetDefaultDrive()` → personal OneDrive `drive_id`.
-- **Scan ALL THREE artifact roots under `Documents/Cowork/` — not just `sessions/`.** Sessions are written to more than one place, and skipping any root silently undercounts the user's work:
-  1. **`Documents/Cowork/sessions/<session-uuid>/`** — interactive sessions, named with a UUID.
-  2. **`Documents/Cowork/Tasks/<task-id>/`** — runs of **scheduled tasks**. Same `input/`+`output/` shape; these are NOT under `sessions/` and are easy to miss.
-  3. **`Documents/Cowork/<slug>/`** — sessions stored **directly** under the Cowork folder using the **task name as a slug** (e.g. `Build-AI-in-One-deck/`), NOT a UUID. To find these, list `Documents/Cowork/` itself and treat every child folder as a session root **except the reserved system folders** `auth`, `sessions`, `skills`, and `Tasks` (handled by roots 1–2 or holding no sessions). A folder qualifies as a session root when it contains an `input/` and/or `output/` subfolder.
-- For each root: `GetDriveChildren(drive_id, item_path="/Documents/Cowork/<root>", top=100)`. If `Documents/...` 404s, retry with `Documentos/...`, then bare `Cowork/...`. (The Cowork folder may be localized/renamed; if so, ask the user for its name once.) If a root (e.g. `Tasks/`) does not exist at all, skip it — its absence is not an error.
-- **Follow pagination on every root.** If the response includes `@odata.nextLink`/`next_link`, keep calling `GetDriveChildren(next_link=...)` until exhausted. A single page caps at ~20–100 folders; never assume page 1 is the full set or older in-window sessions will be silently dropped.
-- Keep session folders (from any root) whose `createdDateTime` or `lastModifiedDateTime` falls in the window. De-duplicate by folder id so a session reachable via more than one path is counted once.
+- `GetDriveChildren(drive_id, item_path="/Documents/Cowork/sessions", top=100)`. If 404, try `Documentos/Cowork/sessions`, then `Cowork/sessions`. (The Cowork folder may be localized/renamed; if so, ask the user for its name once.)
+- **Follow pagination.** If the response includes `@odata.nextLink`/`next_link`, keep calling `GetDriveChildren(next_link=...)` until exhausted. A single page caps at ~20–100 folders; never assume page 1 is the full set or older in-window sessions will be silently dropped.
+- Keep session folders whose `createdDateTime` or `lastModifiedDateTime` falls in the window.
 - For each kept session, `GetDriveChildren` into its `output/` (and `input/`) subfolders to collect artifact filenames, extensions **and per-file `createdDateTime`**. Run these lookups in parallel batches.
 - **Execution time (`exec_min`).** Estimate each session's run time as minutes from the session folder `createdDateTime` (start) to the **latest artifact `createdDateTime`** (end). Use `createdDateTime`, NOT `lastModifiedDateTime` — last-modified drifts whenever the user re-opens a file later (e.g. a deck created at 23:39 but edited two days on). Sessions with no output artifact have no reliable span → leave `exec_min` null.
-- **Keep output-less sessions.** A session folder with only `input/` (or empty) still counts — record it with empty `artifacts`; `classify.py` tags it `general` (conversational) so it is not dropped. **Folder-less chat sessions leave no OneDrive trace at all** — a daily briefing, inbox triage, or quick Q&A that saves no file writes nothing to `sessions/`, `Tasks/`, or a direct slug folder, so it cannot be recovered from OneDrive. This means the report is a **conservative baseline**: it counts the work that produced or consumed a saved artifact, and undercounts pure-chat work. See the telemetry note below for the forward fix.
+- **Keep output-less sessions.** A session folder with only `input/` (or empty) still counts — record it with empty `artifacts`; `classify.py` tags it `general` (conversational) so it is not dropped. **Folder-less chat sessions leave no OneDrive trace at all** (the `Cowork/` root holds only `auth`, `sessions`, `skills` — no transcript or index), so they cannot be recovered from OneDrive; see the telemetry note below for the forward fix.
 - **Live-session telemetry (richer signal).** The *currently running* session exposes its own transcript. Run `python scripts/mine_session.py --out working/session_telemetry.json` to capture REAL run time, tool-call counts and artifacts for this session, then append the record to a durable log (e.g. `Documents/Cowork/sessions/_telemetry.jsonl` in OneDrive). Over time this log lets the report include chat-only sessions and use measured run time + tool intensity for leverage instead of inferring from file timestamps. Past sessions ran in separate containers and are NOT readable from the current one — only the live session can be mined.
+- **Credit cost via `/cost` (exact, forward-only).** Cowork bills in Copilot Credits ($0.01 each), and the live `/cost` command reports the exact credits for the running task (e.g. *"556.1 credits used for this task so far."*). This is the **only** exact per-task credit source and is capturable **only live** — OneDrive stores no credit data, so historical sessions can never be back-filled. At the end of a run, send `/cost`, read the number, and record it with the telemetry:
+  `python scripts/mine_session.py --cost-text "<the exact /cost reply>" --out working/session_telemetry.json`
+  (or `--credits 556.1`). Append the resulting record — which now carries `credits` + `credits_source:"measured"` — to `_telemetry.jsonl`. When harvesting, merge each session's logged `credits` into its raw record (field `credits`). Sessions with no reading are **estimated** and calibrated to the measured ones (see Methodology → Credits & ROI).
 
 ### 4. Classify each session into run tasks (the methodology)
 A **session** contains one or more **run tasks**; each run task maps to exactly one of the eight categories
@@ -119,11 +120,12 @@ The raw harvest you write to `working/cowork_raw.json` (input to `classify.py`):
                  "goal":"<short verb-first phrase>",
                  "inputs":  [{"name":"report-1.pdf","ext":"pdf"}, ...],
                  "outputs": [{"name":"deck.pptx","ext":"pptx"}, ...],
-                 "has_folder":true, "exec_min":<measured minutes|null>}, ... ] }
+                 "has_folder":true, "exec_min":<measured minutes|null>,
+                 "credits":<exact /cost credits|null>}, ... ] }
 ```
 `classify.py` adds the `tasks` array (categories) and writes `working/cowork_sessions.json`. Where a live
-`session_telemetry.json` exists for a session, prefer its measured `exec_min`, tool counts and `produced_artifact`
-flag over the file-timestamp estimate.
+`session_telemetry.json` exists for a session, prefer its measured `exec_min`, `tool_calls`, `credits` and
+`produced_artifact` flag over the file-timestamp estimate.
 
 ### 5. Compute & render (bundled scripts — no hand arithmetic)
 - `python scripts/compute.py --in working/cowork_sessions.json --out working/cowork_roi_data.json`
@@ -135,7 +137,7 @@ is the renderer and embeds the glossary + clickable slide-12 sources.)
 
 ### 6. Show highlights & verify
 Present a short highlights summary (or a `render_ui` card via the `render-ui` skill): speed multiplier,
-expert-equivalent hours, professional-services value, top 3 categories and top goals. Tell the user the report is saved to their files.
+expert-equivalent hours, professional-services value, **credits used + credit cost + ROI on credits**, top 3 categories and top goals. Tell the user the report is saved to their files.
 
 ### 7. Automate (only if the user chose it in Q2)
 Call `SetupScheduledPrompt` with **execution_mode="inline"**, frequency **Day**, **interval = N** (7/15/30),
@@ -182,6 +184,13 @@ Source URLs are embedded as clickable links inside the generated report's Glossa
 
 The report also renders an **Analyzed → Produced** breakdown (inputs analyzed vs. outputs produced, by type) from the same artifact counts.
 
+### Credits & ROI (v7)
+Cowork is metered in **Copilot Credits** ($0.01 each). The report now correlates each session's work with its credit cost and frames a **return on spend**:
+- **Measured credits** — when a session carries an exact `/cost` reading (captured via `mine_session.py --credits`), that value is used directly (`credits_source:"measured"`).
+- **Estimated credits** — otherwise `compute.py` models them from the drivers Microsoft cites: `base + per-input·#inputs + per-output·#outputs + Σ per-category reasoning depth (+ tool-calls/runtime when telemetry exists)`. Constants are anchored so a medium task (~8 sources + 1 deck) ≈ 550 credits, matching a real `/cost` reading of 556.1.
+- **Calibration** — if any measured values exist, the estimator is scaled by `Σ measured ÷ Σ estimate-on-those-sessions` (clamped 0.5×–2.0×) so modeled sessions track real spend.
+- **Headline figures** — `credit_cost = Σ credits × $0.01`; **ROI** `= professional-services value ÷ credit cost`; **net value** `= value − credit cost`. Credits are fixed; value and ROI follow the live hourly rate. Credits are attributed per category (split across a session's tasks) and per business process.
+
 ---
 
 ## Guardrails
@@ -193,7 +202,7 @@ The report also renders an **Analyzed → Produced** breakdown (inputs analyzed 
 - **Fail open.** If the OneDrive Cowork folder is missing/404, note it and ask for the folder name rather than aborting.
 
 ## Bundled files
-- `scripts/mine_session.py` — mines the live session transcript for measured run time, tool intensity and artifacts (telemetry).
+- `scripts/mine_session.py` — mines the live session transcript for measured run time, tool intensity, artifacts and the exact `/cost` credits (telemetry).
 - `scripts/classify.py` — deterministic ext→category classifier; emits the `inputs`/`outputs` schema compute.py consumes.
-- `scripts/compute.py` — applies the research-anchored bands + v5 two-clock speed-multiplier model → payload JSON.
-- `scripts/build_report.py` — renders the single-file HTML report (speed multiplier, Analyzed→Produced, glossary, clickable sources, live rate, PDF).
+- `scripts/compute.py` — applies the research-anchored bands + v5 two-clock speed-multiplier model + v7 credit/ROI model → payload JSON.
+- `scripts/build_report.py` — renders the single-file HTML report (speed multiplier, Analyzed→Produced, Credits & ROI, glossary, clickable sources, live rate, PDF).

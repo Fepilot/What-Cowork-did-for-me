@@ -112,31 +112,6 @@ time split and a "sources distilled per deliverable" ratio. This maps directly t
   Analyzed/Produced bars. **Skills augmented** (roles) is retained — it re-frames the categories as
   "the team you'd have hired", which earns its place as narrative for a finance audience.
 
-## v5.2 — harvest all three artifact roots
-
-**Date:** 2026-06-16
-**Scope:** `SKILL.md` (harvest workflow), `README.md`
-
-Two harvest bugs were undercounting sessions because the workflow only scanned
-`Documents/Cowork/sessions/`:
-
-1. **Sessions outside `sessions/`.** Cowork also stores some sessions **directly** under
-   `Documents/Cowork/<slug>/`, named with the task-name slug instead of a UUID. These were never
-   scanned. Fix: list `Documents/Cowork/` itself and treat each child folder as a session root,
-   excluding the reserved system folders `auth`, `sessions`, `skills`, `Tasks`.
-2. **`Tasks/` folder not scanned.** Scheduled-task runs land in `Documents/Cowork/Tasks/<task-id>/`,
-   not in `sessions/`. Fix: scan `Tasks/` as a first-class root with the same `input/`+`output/`
-   handling.
-
-The harvest now sweeps **three roots** (`sessions/`, `Tasks/`, direct slug folders), paginates each,
-and de-duplicates by folder id so a session reachable via more than one path is counted once. The
-classify/compute/render scripts are unchanged — they already operate on whatever sessions the
-harvest collects.
-
-Also documented the **chat-only limitation** (sessions that save no file leave no OneDrive trace, so
-the multiplier is a conservative baseline; `_telemetry.jsonl` is the forward fix) in both `SKILL.md`
-and the README caveats.
-
 ## Migration
 
 Re-harvest sessions with the new `inputs`/`outputs` arrays to get the artifact-scaled multiplier

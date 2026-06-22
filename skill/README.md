@@ -7,9 +7,12 @@ value**, using an artifact-scaled time model anchored in published research.
 
 > **v5 update (June 2026):** the report now leads with a **speed multiplier** driven by the
 > number of distinct artifacts *analyzed* and *produced*, and frames value as a
-> **professional-services equivalent** at the user's chosen rate. The old ROI / Copilot-seat-cost
-> figure has been removed because credit & seat consumption isn't available. See
+> **professional-services equivalent** at the user's chosen rate. See
 > [`CHANGELOG-v5.md`](CHANGELOG-v5.md) for the full diff and rationale.
+>
+> **v7 update:** ROI is back — now that Cowork is metered in **Copilot Credits**, the report
+> correlates each task with its **credit cost** (measured live from `/cost`, or estimated and
+> calibrated) and reports the **return on that spend**. See [`CHANGELOG-v7.md`](CHANGELOG-v7.md).
 
 ---
 
@@ -20,10 +23,12 @@ cowork-roi-report-skill/
 ├── SKILL.md              # skill definition + workflow (loaded by Cowork)
 ├── README.md             # this file
 ├── CHANGELOG-v5.md       # what changed in v5 and why
+├── CHANGELOG-v6.md       # v6 changes
+├── CHANGELOG-v7.md       # v7 credits & ROI changes
 ├── scripts/
-│   ├── mine_session.py   # mines the live session transcript for measured run time + telemetry
+│   ├── mine_session.py   # mines the live session transcript for measured run time + /cost credits + telemetry
 │   ├── classify.py       # deterministic ext->category classifier -> inputs/outputs schema
-│   ├── compute.py        # applies the methodology -> payload JSON
+│   ├── compute.py        # applies the methodology + credit/ROI model -> payload JSON
 │   └── build_report.py   # renders the self-contained HTML report
 └── examples/
     ├── sample_sessions.json   # synthetic input (safe to share)
@@ -53,16 +58,8 @@ No third-party dependencies — standard-library Python 3 only.
 
 ## Input schema (`cowork_sessions.json`)
 
-The skill harvests Cowork session workspaces from OneDrive — scanning **all three artifact
-roots** under `Documents/Cowork/`, each with `input/` and `output/` subfolders:
-
-| Root | Holds |
-|---|---|
-| `Documents/Cowork/sessions/<uuid>/` | Interactive sessions (UUID-named) |
-| `Documents/Cowork/Tasks/<task-id>/` | Runs of **scheduled tasks** |
-| `Documents/Cowork/<slug>/` | Sessions stored **directly** under Cowork, named with the task-name slug (not a UUID). The reserved folders `auth`, `sessions`, `skills`, `Tasks` are skipped. |
-
-After de-duplicating by folder id and filtering to the window, it writes this:
+The skill harvests Cowork session workspaces from OneDrive
+(`Documents/Cowork/sessions/<uuid>/input` and `/output`) and writes this:
 
 ```jsonc
 {
@@ -149,14 +146,39 @@ in the report's Glossary and in `build_report.py`.
 ## Output (HTML report sections)
 
 - **Hero** — speed multiplier (conservative/typical/optimistic) + professional-services value
-- **KPIs** — sessions, run tasks, artifacts, active days, expert-equiv hours, speed multiplier, hands-on hours
+- **KPIs** — sessions, run tasks, active days, expert-equiv hours, hands-on hours, **credits used, ROI on credits**
 - **By category** — where the expert-equivalent time went (research-anchored bars)
 - **Analyzed → Produced** — sources you fed in (by type) vs. deliverables produced (by type), with the ingest-vs-author time split (the consume/produce shape of your leverage)
+- **Credits & ROI** — Copilot credits consumed and their $ cost (at $0.01/credit), the return on spend (value ÷ credit cost), net value, credits by task category, and per-session credits in the process table (measured vs. estimated)
 - **Skills augmented** roles
-- **Goals & leverage** — per-session goal with hours, value, and speed multiplier
+- **Work by business process** — a table mapping each goal to the business process it advanced, its task category, the project, the assistance provided (hours saved, value, speed multiplier), **and the credits it cost**. Process labels are derived dynamically from the user's profile and their own goal vocabulary (no hardcoded projects).
 - **Activity heatmap** (day × hour)
 - **Methodology & glossary** — every band traceable, with clickable research sources
-- A **live hourly-rate control** recalculates all dollar figures; the speed multiplier is rate-independent
+- A **live hourly-rate control** recalculates all dollar figures and the ROI; the speed multiplier and credit counts are rate-independent
+
+---
+
+## Credits & ROI (the cost side)
+
+Cowork is metered in **Copilot Credits** ($0.01 each). The report correlates each task with its credit
+cost and frames a return on spend:
+
+```
+credit_cost = Σ credits × $0.01
+ROI         = professional-services value ÷ credit_cost
+net_value   = professional-services value − credit_cost
+```
+
+Credits come from one of two tiers:
+
+| Tier | Source | When |
+|---|---|---|
+| **Measured** | the exact `/cost` reading ("556.1 credits used for this task so far.") captured via `mine_session.py --credits` | available **live only**, going forward |
+| **Estimated** | modeled from inputs, outputs, task category (+ tool calls/runtime when telemetry exists) | any session with no `/cost` reading |
+
+When any measured values exist, the estimator is **calibrated** to them with a single global scale factor
+(clamped 0.5×–2.0×), so modeled sessions track real spend. OneDrive stores no credit data, so historical
+sessions can only be estimated — capture `/cost` at the end of each run to anchor future reports.
 
 ---
 
@@ -164,13 +186,8 @@ in the report's Glossary and in `build_report.py`.
 
 - The **assisted clock is modeled**, not measured — OneDrive records artifacts, not keystroke time.
   Treat the multiplier as **directional**, not a stopwatch.
+- **Credits are measured only when a `/cost` reading was captured**; otherwise they are modeled estimates,
+  calibrated to whatever measured values exist. Treat estimated credit costs as directional too.
 - Categories with **no saved artifacts** in the window are reported as **zero**, keeping totals a
   conservative floor.
 - Counting stays conservative: ~2 run tasks per session; supporting files folded into the primary task.
-- **Chat-only sessions are invisible (known limitation).** Daily briefings, inbox triage, quick
-  lookups and other conversational sessions that save no file leave **no trace in OneDrive** —
-  nothing is written to `sessions/`, `Tasks/`, or a direct slug folder. They therefore can't be
-  counted from artifacts, so **the speed multiplier and value are a conservative baseline** that
-  reflects only artifact-producing/consuming work. The `mine_session.py` telemetry path
-  (`_telemetry.jsonl`) is the forward fix: as it accumulates measured run-time and tool-intensity
-  records, future reports can include chat-only sessions and tighten the multiplier.

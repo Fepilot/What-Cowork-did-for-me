@@ -10,7 +10,7 @@ import json, argparse, html
 
 # ---- Methodology glossary: per-category research anchors (from the v4 deck) ----
 CAT_SOURCES = {
- "Analysis & Research": "Stanford & World Bank 2025 (SSRN 5136877): mean of the 5 research-adjacent O*NET task categories = ~71 min saved per task (Typical). LOW (30) = McKinsey 2023, 25–40% uplift on a ~60-min analytical task. HIGH (92) = Stanford-WB Complex Problem Solving ceiling.",
+ "Analysis & Research": "Stanford & World Bank 2025 (SSRN 5136877): mean of the 5 research-adjacent O*NET task categories (Critical Thinking 75, Active Learning 50, Quality Control Analysis 67, Judgement & Decision Making 51, Complex Problem Solving 92) = 335÷5 ≈ 67 min saved per task (Typical). LOW (30) = McKinsey 2023, 25–40% uplift on a ~60-min analytical task. HIGH (92) = Stanford-WB Complex Problem Solving ceiling.",
  "Document & content creation": "Microsoft Research causal-impact study (Verma, Suri & Counts 2026; difference-in-differences, n=72,186 Word users): ~6.1 min saved per Word activity instance × ~4 instances per doc run (draft → rewrite → format → polish) ≈ 24 min. Corroborated by UK GDS 2025 (~24 min/drafting task, n=20K).",
  "Email workflows": "Dillon et al., NBER w33795 (2025), RCT n=6,000+ across 56 firms: ~2 hr/week email savings ÷ 14.5 replies/week ≈ 7 min per substantive reply. LOW (3) = Noy & Zhang, Science 2023.",
  "Meeting workflows": "Microsoft Work Trend Index Special Report 2023 (Study #2; Cambon et al., n=57 RCT): recap of a 35-min missed Teams meeting fell from 42m 34s to 11m 13s ≈ 31 min saved per recap (~3.8× faster).",
@@ -54,11 +54,11 @@ GITHUB_URL = "https://github.com/microsoft/What-I-Did-Copilot#what-i-did--github
 # All 8 methodology categories with their bands (so the glossary documents every category,
 # even those with no tasks in a given window).
 ALL_CATS = [
- ("Analysis & Research",30,71,92),
+ ("Analysis & Research",30,67,92),
  ("Document & content creation",12,24,42),
  ("Email workflows",3,7,12),
- ("Meeting workflows",12,31,45),
- ("Communication workflows",2,4,6),
+ ("Meeting workflows",12,31,43),
+ ("Communication workflows",2,4,11),
  ("Specialized workflows",10,25,40),
  ("Write or debug code",30,56,96),
  ("General assistance / Other",2,5,8),
@@ -77,6 +77,10 @@ GLOSSARY_TERMS = [
  ("Active day", "A calendar day on which you ran at least one Cowork session in the window."),
  ("Intent / collaboration style", "How you were directing Cowork on each task — e.g. Researching vs. Building — derived from each task's category."),
  ("Skill augmented", "The professional role the task draws on (Data Analyst, Engineer, Content Writer, etc.), with the hours Cowork covered for you in that role."),
+ ("Copilot Credits", "The unit Cowork meters consumption in, billed pay-as-you-go at $0.01/credit. Credit cost rises with the model used, context loaded, tool calls and runtime. The live /cost command reports the exact credits for the running task (e.g. '556.1 credits used for this task so far.')."),
+ ("Measured vs. estimated credits", "A session is 'measured' when an exact /cost reading was captured for it; otherwise its credits are 'estimated' from the same drivers Microsoft cites (inputs, outputs, task category, and — when telemetry exists — tool calls and runtime). When any measured values exist, the estimator is calibrated to them with a single global scale factor."),
+ ("ROI on credits", "Professional-services value ÷ credit cost. An ROI of 50× means each $1 of credits spent returned $50 of expert-equivalent work. Because value follows your hourly rate while credit cost is fixed, ROI recalculates live when you change the rate."),
+ ("Net value after credits", "Professional-services value minus the credit cost of producing it — the value left over once Cowork's consumption is paid for."),
 ]
 
 def esc(s): return html.escape(str(s))
@@ -86,6 +90,8 @@ def build(data, out_path):
     intents=data["intents"]; roles=data["roles"]; goals=data["goals"]; heat=data["heatmap"]
     rate=m["hourly_rate_default"]; win=m["window"]
     lev=data.get("leverage",{}) or {}
+    cr=data.get("credits",{}) or {}
+    cprice=cr.get("price_usd",m.get("credit_price",0.01))
 
     # ----- category bar chart (SVG, width scaled to max hours) -----
     maxh=max(c["hours_typical"] for c in cats) or 1
@@ -136,7 +142,13 @@ def build(data, out_path):
     hours=list(range(8,20))
     hmap={(h["date"],h["hour"]):h["count"] for h in heat}
     maxc=max(hmap.values()) if hmap else 1
-    head="<th></th>"+"".join(f"<th>{hh}</th>" for hh in hours)
+
+    def fmt_hour(h):
+        if h==12: return "12pm"
+        if h>12:  return f"{h-12}pm"
+        return f"{h}am"
+
+    head='<th class="heat-corner">Date &darr; &nbsp; Time &rarr;</th>'+"".join(f"<th>{fmt_hour(hh)}</th>" for hh in hours)
     body=""
     import datetime
     for d in days:
@@ -146,29 +158,57 @@ def build(data, out_path):
             c=hmap.get((d,hh),0)
             if c:
                 a=0.18+0.82*(c/maxc)
-                cells+=f'<td class="hc" style="background:rgba(15,108,189,{a:.2f})" title="{lbl} {hh}:00 · {c} task(s)">{c}</td>'
+                cells+=f'<td class="hc" style="background:rgba(15,108,189,{a:.2f})" title="{lbl} · {fmt_hour(hh)} · {c} run task(s)">{c}</td>'
             else:
                 cells+='<td class="hc empty"></td>'
         body+=f'<tr><td class="hd">{lbl}</td>{cells}</tr>'
-    heat_table=f'<table class="heat"><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>'
+    heat_legend='<div class="heat-legend">Each number = run tasks started in that hour &nbsp;·&nbsp; Shade = relative intensity (darker = more tasks) &nbsp;·&nbsp; Times are local</div>'
+    heat_table=f'<table class="heat"><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>{heat_legend}'
 
-    # ----- goals list -----
-    goal_rows=""
+    # ----- work-by-process table — grouped by value pillar, accent border replaces pill -----
+    PILLAR_ORDER  = ["Improved Performance","Cost Savings","Innovation","Risk Mitigation"]
+    PILLAR_COLORS = {
+        "Improved Performance": ("#E3F6F7","#00636A"),   # teal — distinct from blue task pills
+        "Cost Savings":         ("#F2FAF5","#107C41"),   # green — no overlap
+        "Innovation":           ("#F3E8FB","#6B2FA0"),   # purple — fine now proc pills are gray
+        "Risk Mitigation":      ("#FDF3F3","#A4262C"),   # red — no overlap
+    }
+    # Group goals by pillar, maintaining per-group sort by hours desc
+    pillar_groups = {}
     for g in goals:
         if g["minutes_typical"]==0: continue
-        pills="".join(f'<span class="pill">{esc(c)}</span>' for c in g["categories"])
-        if g.get("conversational"):
-            pills+='<span class="pill conv">chat-only</span>'
-        arts=" · ".join(esc(a) for a in g["artifacts"][:4]) if g["artifacts"] else "review / Q&A (no saved file)"
-        # speed multiplier from measured execution time (if available)
-        if g.get("speed_x"):
-            spd=f'<div class="g-spd" title="Expert-equivalent effort ÷ estimated hands-on time">{g["speed_x"]}× faster · ~{g["exec_min"]:.0f} min hands-on</div>'
-        else:
-            spd='<div class="g-spd muted">run time n/a</div>'
-        goal_rows+=f"""<tr>
-          <td><div class="g-title">{esc(g['title'])}</div><div class="g-meta">{esc(g['date'])} · {g['n_tasks']} task(s) · {arts}</div><div>{pills}</div></td>
-          <td class="g-h"><b data-hours="{g['hours_typical']}">{g['hours_typical']}h</b><br><span class="g-v" data-hours="{g['hours_typical']}">${round(g['hours_typical']*rate):,}</span>{spd}</td>
-        </tr>"""
+        p = g.get("value_pillar","Improved Performance")
+        pillar_groups.setdefault(p,[]).append(g)
+
+    proc_rows=""
+    for pillar in PILLAR_ORDER:
+        group = pillar_groups.get(pillar,[])
+        if not group: continue
+        bg,fg = PILLAR_COLORS.get(pillar,("#F3F2F1","#605E5C"))
+        # Section header spanning all 4 columns
+        proc_rows+=f'<tr><td colspan="5" style="background:{bg};color:{fg};font-weight:700;font-size:11.5px;letter-spacing:.5px;text-transform:uppercase;padding:9px 12px;border-left:4px solid {fg}">{pillar}</td></tr>'
+        for g in sorted(group,key=lambda x:-x["hours_typical"]):
+            proc=esc(g.get("process","General Productivity"))
+            cat_pills="".join(f'<span class="pill">{esc(c)}</span>' for c in g["categories"])
+            if g.get("conversational"):
+                cat_pills+='<span class="pill conv">chat-only</span>'
+            arts=" · ".join(esc(a) for a in g["artifacts"][:3]) if g["artifacts"] else "review / Q&A (no saved file)"
+            if g.get("speed_x"):
+                mult=f'<div class="g-spd">{g["speed_x"]}× faster · ~{g["exec_min"]:.0f} min hands-on</div>'
+            else:
+                mult='<div class="g-spd muted">run time n/a</div>'
+            gc=g.get("credits",0); gsrc=g.get("credits_source","estimated")
+            src_badge=('<span class="cr-badge meas">measured</span>' if gsrc=="measured"
+                       else '<span class="cr-badge est">est.</span>')
+            cred_cell=(f'<td class="g-cr"><b>{gc:,.1f}</b> cr{src_badge}'
+                       f'<div class="g-spd muted">${gc*cprice:,.2f}</div></td>')
+            proc_rows+=f"""<tr style="border-left:4px solid {fg}">
+              <td><span class="pill proc">{proc}</span></td>
+              <td>{cat_pills}</td>
+              <td><div class="g-title">{esc(g['title'])}</div><div class="g-meta">{esc(g['date'])} · {arts}</div></td>
+              <td class="g-h"><b data-hours="{g['hours_typical']}">{g['hours_typical']}h saved</b> · <span class="g-v" data-hours="{g['hours_typical']}">${round(g['hours_typical']*rate):,}</span>{mult}</td>
+              {cred_cell}
+            </tr>"""
 
     # ----- glossary -----
     used_labels={c["label"] for c in cats}
@@ -190,6 +230,62 @@ def build(data, out_path):
             seen.add(u)
             ref_items+=f'<li><a href="{esc(u)}" target="_blank" rel="noopener">{esc(t)} ↗</a></li>'
     gloss_terms="".join(f"<div class='gl-term'><b>{esc(t)}</b><span>{esc(d)}</span></div>" for t,d in GLOSSARY_TERMS)
+
+    top_roles_str=" · ".join(r["role"] for r in roles[:3] if r["hours"]>=0.2)
+
+    # ----- credits & ROI section -----
+    credits_section=""
+    if cr:
+        cc_items=cr.get("by_category",[])
+        ccmax=max((it["credits"] for it in cc_items),default=1) or 1
+        cpal=["#823BBD","#0F6CBD","#2899F5","#107C41","#C19C00","#0B5394","#50AAE8","#8A8886"]
+        cc_bars=""
+        for i,it in enumerate(cc_items):
+            w=int(it["credits"]/ccmax*100); col=cpal[i%len(cpal)]
+            cc_bars+=(f'<div class="bar-row"><div class="bar-label">{esc(it["label"])}</div>'
+                      f'<div class="bar-track"><div class="bar-fill" style="width:{max(w,4)}%;background:{col}"></div>'
+                      f'<span class="bar-val">{it["credits"]:,} cr · ${it["cost"]:,.2f}</span></div></div>')
+        cc_bars=cc_bars or '<div class="lead" style="margin:6px 0">No credit data in this window.</div>'
+        meas_n=cr.get("measured_sessions",0); est_n=cr.get("estimated_sessions",0)
+        if meas_n and est_n:
+            basis=(f'{meas_n} session(s) use the exact <code>/cost</code> reading; {est_n} are '
+                   f'modeled and calibrated to them (scale {cr.get("scale",1)}×).')
+        elif meas_n:
+            basis=f'All {meas_n} session(s) use the exact <code>/cost</code> reading.'
+        else:
+            basis=(f'All {est_n} session(s) are <b>modeled estimates</b> — no <code>/cost</code> reading '
+                   f'was captured. Run <code>/cost</code> and log it via <code>mine_session.py --credits</code> '
+                   f'to anchor these to real spend.')
+        cpd=cr.get("cost_per_deliverable"); cph=cr.get("credits_per_expert_hour")
+        extra=[]
+        if cpd is not None: extra.append(f"~${cpd:,.2f} credit cost per deliverable")
+        if cph is not None: extra.append(f"~{cph:,.0f} credits per expert-equivalent hour")
+        extra_str=" · ".join(extra)
+        credits_section=f"""
+  <h2><span class="sec">💳</span> Credits &amp; ROI</h2>
+  <p class="lead">What this Cowork work <b>cost in Copilot Credits</b> (at ${cprice:.2f}/credit) versus the professional-services value it delivered. Credits are fixed; the value and ROI follow your hourly rate.</p>
+  <div class="card roi-hero">
+    <div>
+      <div class="bvm-pill cost">Consumption</div>
+      <div class="roi-cap">Copilot Credits used</div>
+      <div class="roi-big" style="color:#823BBD">{cr.get('total',0):,.0f}<span style="font-size:18px;font-weight:600"> cr</span></div>
+      <div class="roi-cap" style="margin-top:6px">≈ <b>${cr.get('cost_usd',0):,.2f}</b> at ${cprice:.2f}/credit · {esc(extra_str)}</div>
+      <div class="roi-cap" style="margin-top:8px;font-size:12px">{basis}</div>
+    </div>
+    <div>
+      <div class="bvm-pill perf">Return on spend</div>
+      <div class="roi-cap">Value delivered ÷ credit cost</div>
+      <div class="roi-big" style="color:var(--green)"><span class="roi-x" data-hours="{cr.get('value_usd',0)/rate if rate else 0:.4f}" data-cost="{cr.get('cost_usd',0)}">{cr.get('roi_x',0)}</span>×</div>
+      <div class="roi-cap" style="margin-top:6px">Every $1 of credits returned <b><span class="roi-x" data-hours="{cr.get('value_usd',0)/rate if rate else 0:.4f}" data-cost="{cr.get('cost_usd',0)}">{cr.get('roi_x',0)}</span></b> of expert-equivalent work</div>
+      <div class="roi-cap" style="margin-top:6px">Net value after credit cost: <b>$<span class="net-v" data-hours="{cr.get('value_usd',0)/rate if rate else 0:.4f}" data-cost="{cr.get('cost_usd',0)}">{cr.get('net_value_usd',0):,}</span></b></div>
+    </div>
+  </div>
+  <div class="card" style="margin-top:14px">
+    <div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--mut);margin-bottom:12px">Credits by task category</div>
+    {cc_bars}
+    <p style="margin:12px 0 0;font-size:12px;color:var(--mut)">Credits are split evenly across each session's task categories. Per-session credits appear in the “Credits” column of the business-process table below — <b>measured</b> rows carry an exact <code>/cost</code> reading, <b>est.</b> rows are modeled.</p>
+  </div>
+"""
 
     payload_json=json.dumps({
         "rate":rate,
@@ -225,6 +321,10 @@ h1{{font-size:34px;margin:14px 0 6px;font-weight:700;letter-spacing:-.5px}}
 .kpi .s{{font-size:11px;color:var(--mut);margin-top:3px}}
 .kpi.accent{{background:linear-gradient(135deg,#F2FAF5,#fff);border-color:#C7E5CD}}
 .kpi.accent .n{{color:var(--green)}}
+.cr-badge{{display:inline-block;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;padding:1px 5px;border-radius:6px;margin-left:6px;vertical-align:middle}}
+.cr-badge.meas{{background:#E3F6F7;color:#00636A}}
+.cr-badge.est{{background:#F3F2F1;color:#605E5C}}
+.g-cr{{text-align:right;white-space:nowrap;font-size:13px}}
 .roi-hero{{display:grid;grid-template-columns:1.1fr 1fr;gap:22px;align-items:center}}
 .roi-big{{font-size:64px;font-weight:800;color:var(--green);line-height:1}}
 .roi-cap{{font-size:14px;color:var(--mut)}}
@@ -245,16 +345,20 @@ h2 .sec{{color:var(--blue)}}
 .lg{{font-size:13px;margin:5px 0}}.dot{{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:7px}}
 table.tbl{{width:100%;border-collapse:collapse;font-size:13.5px}}
 table.tbl td{{border-top:1px solid var(--line);padding:12px 8px;vertical-align:top}}
+table.tbl th{{text-align:left;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--mut);padding:0 8px 8px;border-bottom:2px solid var(--line);white-space:nowrap}}
+.pill.proc{{background:#F0F0F0;color:#3C3C3C;border-color:#D0D0D0;font-weight:600}}
 .g-title{{font-weight:600}}.g-meta{{font-size:12px;color:var(--mut);margin:3px 0 6px}}
 .pill{{display:inline-block;background:#EFF6FC;color:var(--blue);border:1px solid #CFE4F7;border-radius:20px;padding:2px 10px;font-size:11.5px;margin:2px 4px 0 0}}
 .g-h{{text-align:right;white-space:nowrap}}.g-v{{color:var(--green);font-weight:600}}
 .g-spd{{font-size:11px;color:var(--blue);font-weight:600;margin-top:4px}}.g-spd.muted{{color:#A19F9D;font-weight:400}}
 .pill.conv{{background:#F3F2F1;color:#605E5C;border-color:#E1DFDD}}
-.heat{{border-collapse:collapse;font-size:11px;width:100%}}
-.heat th{{color:var(--mut);font-weight:600;padding:2px;text-align:center}}
+.heat{{border-collapse:collapse;font-size:11px;width:auto}}
+.heat th{{color:var(--mut);font-weight:600;padding:4px 6px;text-align:center;white-space:nowrap}}
+.heat th.heat-corner{{text-align:left;font-style:italic;font-size:10px;padding-right:12px;color:var(--mut)}}
 .heat td.hd{{color:var(--mut);text-align:right;padding-right:8px;white-space:nowrap;font-size:11.5px}}
-.heat td.hc{{width:30px;height:26px;text-align:center;border-radius:4px;color:#fff;font-weight:600}}
+.heat td.hc{{width:38px;height:30px;text-align:center;border-radius:4px;color:#fff;font-weight:700;font-size:12px}}
 .heat td.hc.empty{{background:#F3F2F1}}
+.heat-legend{{margin-top:10px;font-size:11.5px;color:var(--mut);font-style:italic}}
 details.gl{{border:1px solid var(--line);border-radius:12px;background:var(--card);margin:14px 0;overflow:hidden}}
 details.gl>summary{{cursor:pointer;list-style:none;padding:18px 22px;font-weight:700;font-size:17px;display:flex;justify-content:space-between;align-items:center}}
 details.gl>summary::-webkit-details-marker{{display:none}}
@@ -278,6 +382,11 @@ a{{color:var(--blue)}}
 .reflist li{{font-size:13.5px;margin:6px 0}}
 .reflist a{{color:var(--blue);font-weight:600}}
 .nouse{{display:inline-block;background:#F3F2F1;color:#8A8886;border-radius:10px;padding:1px 8px;font-size:10.5px;margin-left:6px;font-weight:600}}
+.bvm-pill{{display:inline-block;border-radius:20px;padding:2px 10px;font-size:10.5px;font-weight:700;letter-spacing:.4px;vertical-align:middle;text-transform:uppercase;margin-bottom:8px}}
+.bvm-pill.perf{{background:#E3F6F7;color:#00636A;border:1px solid #B2E4E7}}
+.bvm-pill.cost{{background:#F2FAF5;color:#107C41;border:1px solid #C7E5CD}}
+.bvm-pill.trans{{background:#F3E8FB;color:#6B2FA0;border:1px solid #E5CCF5}}
+.bvm-pill.risk{{background:#FDF3F3;color:#A4262C;border:1px solid #F4CCCC}}
 .foot{{text-align:center;color:var(--mut);font-size:12px;margin-top:30px}}
 .foot a{{color:var(--blue)}}
 html{{scroll-behavior:smooth}}
@@ -296,12 +405,13 @@ html{{scroll-behavior:smooth}}
     <a class="btn ghost" href="#glossary">📖 Glossary</a>
     <button class="btn" onclick="window.print()">⬇ Download PDF</button>
   </div>
-  <div class="inspired">Report inspired on <a href="{esc(GITHUB_URL)}" target="_blank" rel="noopener">“What I Did — GitHub Copilot Impact Report” ↗</a></div>
+  <div class="inspired">Report inspired from <a href="{esc(GITHUB_URL)}" target="_blank" rel="noopener">“What I Did — GitHub Copilot Impact Report” ↗</a></div>
 </div></header>
 
 <div class="wrap">
   <div class="card roi-hero">
     <div>
+      <div class="bvm-pill perf">Improved Performance</div>
       <div class="roi-cap">Speed multiplier vs. an unassisted expert</div>
       <div class="roi-big"><span id="spdMult">{val['speed_typical']}</span>×</div>
       <div class="range">
@@ -309,14 +419,47 @@ html{{scroll-behavior:smooth}}
         <span>Typical <b>{val['speed_typical']}</b>×</span>
         <span>Optimistic <b>{val['speed_high']}</b>×</span>
       </div>
-      <div class="roi-cap" style="margin-top:10px">~<b>{val['human_equiv_hours']}h</b> of expert-equivalent effort compressed into ~<b>{val['exec_hours']}h</b> of hands-on Cowork time</div>
+      <div class="roi-cap" style="margin-top:10px">~<b>{val['human_equiv_hours']}h</b> of expert-equivalent effort compressed into ~<b>{val['exec_hours']}h</b> hands-on — faster research, analysis &amp; content creation</div>
     </div>
     <div>
+      <div class="bvm-pill cost">Cost Savings</div>
       <div class="roi-cap">Professional-services equivalent</div>
       <div class="roi-val" style="color:var(--green)">$<span class="money" data-h="{val['hours_typical']}">{val['value_typical']:,}</span></div>
-      <div class="roi-cap" style="margin-top:10px">{val['hours_typical']} expert-equivalent hours × your rate</div>
-      <div class="roi-cap" style="margin-top:6px">range $<span class="money" data-h="{val['hours_low']}">{val['value_low']:,}</span>–$<span class="money" data-h="{val['hours_high']}">{val['value_high']:,}</span></div>
+      <div class="roi-cap" style="margin-top:10px">Assisted value at expert rate — what a specialist would charge for the same deliverables</div>
+      <div class="roi-cap" style="margin-top:6px">{val['hours_typical']}h × your rate · range $<span class="money" data-h="{val['hours_low']}">{val['value_low']:,}</span>–$<span class="money" data-h="{val['hours_high']}">{val['value_high']:,}</span></div>
     </div>
+  </div>
+
+  <div class="card" style="margin-top:18px">
+    <div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--mut);margin-bottom:14px">Value at a glance — {esc(win['label'])}</div>
+    <table class="tbl" style="font-size:13.5px">
+      <thead><tr>
+        <th style="width:160px">Value pillar</th>
+        <th>Business outcome <span style="font-weight:400;font-style:italic">(lagging KPI)</span></th>
+        <th>Cowork indicator <span style="font-weight:400;font-style:italic">(leading KPI)</span></th>
+        <th style="text-align:right;white-space:nowrap">Your result</th>
+      </tr></thead>
+      <tbody>
+        <tr>
+          <td><span class="bvm-pill perf">Improved Performance</span></td>
+          <td>Faster expert-level research, analysis &amp; content creation</td>
+          <td>Speed vs. unassisted expert</td>
+          <td style="text-align:right"><b style="font-size:16px;color:var(--blue)">{val['speed_typical']}×</b> faster</td>
+        </tr>
+        <tr>
+          <td><span class="bvm-pill cost">Cost Savings</span></td>
+          <td>Assisted value at expert rate<div style="font-size:11.5px;color:var(--mut);margin-top:3px;font-style:italic">What a specialist would charge to produce the same deliverables</div></td>
+          <td>Professional-services equivalent at your rate</td>
+          <td style="text-align:right"><b style="font-size:16px;color:var(--green)">$<span class="money" data-h="{val['hours_typical']}">{val['value_typical']:,}</span></b></td>
+        </tr>
+        <tr>
+          <td><span class="bvm-pill trans">Innovation</span></td>
+          <td>New agent-led workflows · role transformation without added headcount</td>
+          <td>Professional roles Cowork covered for you<div style="font-size:11px;color:var(--mut);margin-top:4px;font-weight:400">{top_roles_str}</div></td>
+          <td style="text-align:right"><b style="font-size:16px;color:#6B2FA0">{len([r for r in roles if r['hours']>=0.2])}</b> roles augmented</td>
+        </tr>
+      </tbody>
+    </table>
   </div>
 
   <div class="kpi-grid">
@@ -325,8 +468,18 @@ html{{scroll-behavior:smooth}}
     <div class="kpi"><div class="n">{k['active_days']}</div><div class="l">Active days</div></div>
     <div class="kpi accent"><div class="n">{k['hours_saved_typical']}h</div><div class="l">Expert-equivalent hours</div><div class="s">delivered by Cowork</div></div>
     <div class="kpi"><div class="n">{k['exec_hours']}h</div><div class="l">Hands-on hours</div><div class="s">your time (est.)</div></div>
+    <div class="kpi"><div class="n" style="color:#823BBD">{cr.get('total',0):,.0f}</div><div class="l">Credits used</div><div class="s">≈ ${cr.get('cost_usd',0):,.2f} @ ${cprice:.2f}/cr</div></div>
+    <div class="kpi accent"><div class="n"><span class="roi-x" data-hours="{cr.get('value_usd',0)/rate if rate else 0:.4f}" data-cost="{cr.get('cost_usd',0)}">{cr.get('roi_x',0)}</span>×</div><div class="l">ROI on credits</div><div class="s">value ÷ credit cost</div></div>
   </div>
   {(f'<div class="note-box" style="margin-top:14px"><b>Leverage:</b> across {lev.get("timed_sessions",0)} sessions, Cowork compressed ~{lev.get("human_equiv_hours",0)}h of expert-equivalent effort into an estimated ~{lev.get("exec_hours",0)}h of hands-on time — a <b>{lev.get("speed_multiplier","?")}× speed multiplier</b>. The expert clock scales with the distinct artifacts you analyzed and produced; the assisted clock is a modeled estimate of your hands-on time (OneDrive does not record keystroke time), so treat the multiplier as directional.</div>') if lev.get('speed_multiplier') else ''}
+{credits_section}
+  <h2><span class="sec">📦</span> Work by business process &amp; task category</h2>
+  <p class="lead">Every session mapped to the APQC business process it advanced, the methodology task category, and the assistance Cowork provided.</p>
+  <div class="card"><table class="tbl">
+    <thead><tr><th>Business process</th><th>Task category</th><th>Project</th><th>Impact</th><th style="text-align:right;white-space:nowrap">Credits</th></tr></thead>
+    <tbody>{proc_rows}</tbody></table>
+  <p style="margin:14px 0 0;font-size:12px;color:var(--mut)">* This table shows <b>{k['sessions']} sessions</b> — one row per session. The headline figure of <b>{k['run_tasks']} tasks completed</b> is higher because a single session can span multiple run tasks: for example, a session that analyses source documents <em>and</em> produces a deck counts as both an Analysis &amp; Research task and a Document &amp; content creation task. The task-category bars above break the full {k['run_tasks']} tasks down individually.</p>
+  </div>
 
   <h2><span class="sec">⏱</span> Where the time went — by task category</h2>
   <p class="lead">Each run task is valued at its category's research-anchored <b>Typical</b> minutes saved (methodology v4). Hours are fixed; dollar values follow your hourly rate.</p>
@@ -348,17 +501,13 @@ html{{scroll-behavior:smooth}}
     </div>
   </div>
 
-  <h2><span class="sec">🧠</span> Skills augmented</h2>
-  <p class="lead">Professional roles Cowork covered for you.</p>
+  <h2><span class="sec">🧠</span> Innovation</h2>
+  <p class="lead">New agent-led workflows Cowork stood up for you — the professional roles it covered and the hours it contributed to each. This is where time savings become <b>role transformation</b>: work that previously required a specialist or an external resource handled directly in your workflow, enabling new operating models without additional headcount.</p>
   <div class="card">{role_rows}</div>
 
-  <h2><span class="sec">📦</span> Goals &amp; leverage</h2>
-  <p class="lead">Your Cowork work grouped into goals, each with the time it gave back.</p>
-  <div class="card"><table class="tbl"><tbody>{goal_rows}</tbody></table></div>
-
   <h2><span class="sec">📅</span> Activity heatmap</h2>
-  <p class="lead">When you collaborated with Cowork (run tasks per hour, local time).</p>
-  <div class="card" style="overflow-x:auto">{heat_table}</div>
+  <p class="lead">Run tasks by day and hour of day (local time). Numbers show how many tasks started in that time slot; shade shows relative intensity.</p>
+  <div class="card">{heat_table}</div>
 
   <h2 id="glossary"><span class="sec">📐</span> Methodology &amp; glossary</h2>
   <p class="lead">Every number above is traceable. Expand to see how each metric and band is derived — grounded in the Cowork Time-Savings Methodology v4 and its published sources.</p>
@@ -379,13 +528,20 @@ html{{scroll-behavior:smooth}}
     <b>Expert clock</b> (per session) = research-anchored analysis band per task + ~12 min to read each source document (5 min/image) + the authoring band for each deliverable (deck 45 min, doc 40, sheet/page 35, code 35).<br>
     <b>Assisted clock</b> (per session) = ~8 min prompt/setup + ~2 min per artifact handled (modeled, not measured).<br>
     <b>Speed multiplier</b> = Σ Expert clock ÷ Σ Assisted clock — rate-independent.<br>
-    <b>Professional-services value</b> = Expert-clock hours × your hourly rate (default ${rate}/hr). No ROI/seat-cost figure is shown because credit &amp; seat consumption is not available.<br>
+    <b>Professional-services value</b> = Expert-clock hours × your hourly rate (default ${rate}/hr).<br>
     The <b>Conservative / Optimistic</b> figures re-run the expert clock with the published floor/ceiling analysis bands and lighter/heavier read &amp; authoring weights.
+    </span></div></div>
+  </details>
+  <details class="gl"><summary>How credits &amp; ROI are calculated <span class="chev">▸</span></summary>
+    <div class="gl-body"><div class="gl-term"><span>
+    Cowork meters consumption in <b>Copilot Credits</b> (${cprice:.2f} each, pay-as-you-go). The live <code>/cost</code> command reports the exact credits for a task; that exact value is recorded as <b>measured</b>. Sessions with no <code>/cost</code> reading get an <b>estimated</b> figure modeled from the cost drivers Microsoft cites — context loaded (inputs), generation/tool work (outputs), reasoning depth (task category), and tool-call count + runtime when telemetry exists.<br>
+    <b>Calibration:</b> when any measured values exist, the estimator is scaled by Σ(measured) ÷ Σ(estimate on those same sessions) so modeled sessions track real spend (this report's scale: <b>{cr.get('scale',1)}×</b>, from {cr.get('measured_sessions',0)} measured session(s)).<br>
+    <b>Credit cost</b> = total credits × ${cprice:.2f}. <b>ROI on credits</b> = professional-services value ÷ credit cost. <b>Net value</b> = value − credit cost. Credits are fixed; value and ROI follow your hourly rate.
     </span></div></div>
   </details>
 
   <div class="foot">Generated {esc(m['generated'])} · Cowork Time-Savings Methodology v4 · Figures are research-anchored estimates, not measured timings.<br>
-  Report inspired on <a href="{esc(GITHUB_URL)}" target="_blank" rel="noopener">“What I Did — GitHub Copilot Impact Report” ↗</a> · Powered by Copilot Cowork</div>
+  Report inspired from <a href="{esc(GITHUB_URL)}" target="_blank" rel="noopener">“What I Did — GitHub Copilot Impact Report” ↗</a> · Powered by Copilot Cowork</div>
 </div>
 
 <script>
@@ -397,6 +553,9 @@ function recalc(){{
   document.querySelectorAll('.money').forEach(function(e){{e.textContent=fmt(Math.round(parseFloat(e.dataset.h)*rate));}});
   document.querySelectorAll('.bar-val').forEach(function(e){{if(e.dataset.hours===undefined)return;var h=parseFloat(e.dataset.hours);e.textContent=h+'h · $'+fmt(Math.round(h*rate));}});
   document.querySelectorAll('.g-v').forEach(function(e){{e.textContent='$'+fmt(Math.round(parseFloat(e.dataset.hours)*rate));}});
+  // ROI = (hours*rate) / credit-cost ; recalcs live because value scales with rate
+  document.querySelectorAll('.roi-x').forEach(function(e){{var cost=parseFloat(e.dataset.cost)||0;var v=parseFloat(e.dataset.hours)*rate;e.textContent=cost?(Math.round(v/cost*10)/10):'∞';}});
+  document.querySelectorAll('.net-v').forEach(function(e){{var cost=parseFloat(e.dataset.cost)||0;e.textContent=fmt(Math.round(parseFloat(e.dataset.hours)*rate-cost));}});
 }}
 document.getElementById('rate').addEventListener('input',recalc);
 recalc();
