@@ -14,6 +14,7 @@ The skill:
 - Harvests your Cowork session artifacts (inputs analyzed & outputs produced) from OneDrive
 - Classifies work into 8 research-anchored task categories
 - Applies an **artifact-scaled two-clock model** to compute your speed multiplier
+- Correlates each task with its **Copilot-credit cost** and reports **ROI on that spend**
 - Renders a self-contained, interactive HTML report you can share or print to PDF
 
 Inspired by [microsoft/What-I-Did-Copilot](https://github.com/microsoft/What-I-Did-Copilot), adapted for Copilot Cowork.
@@ -24,18 +25,26 @@ Inspired by [microsoft/What-I-Did-Copilot](https://github.com/microsoft/What-I-D
 
 | Version | File | Status |
 |---|---|---|
-| **v5.2** | [`cowork-roi-report-skill-v5.2-latest.zip`](cowork-roi-report-skill-v5.2-latest.zip) | ✅ **Latest version** — recommended |
-| v5.1 | [`cowork-roi-report-skill-v5.1-previous.zip`](cowork-roi-report-skill-v5.1-previous.zip) | Previous version (kept for reference) |
+| **v10** | [`cowork-roi-report-skill-v10-latest.zip`](cowork-roi-report-skill-v10-latest.zip) | ✅ **Latest version** — recommended |
+| v5.2 | [`cowork-roi-report-skill-v5.2-previous.zip`](cowork-roi-report-skill-v5.2-previous.zip) | Previous version (kept for reference) |
 
-### What's new in v5.2
+### What's new in v10 — Credits & ROI
 
-The harvest step now sweeps **all three OneDrive artifact roots** instead of only `sessions/`, so it no longer undercounts your work:
+Cowork is now metered in **Copilot Credits** ($0.01 each), so v10 reinstates **ROI** — framed against
+the real cost of the work:
 
-1. **`Documents/Cowork/sessions/<uuid>/`** — interactive sessions (UUID-named)
-2. **`Documents/Cowork/Tasks/<task-id>/`** — runs of **scheduled tasks** (previously missed)
-3. **`Documents/Cowork/<slug>/`** — sessions stored **directly** under the Cowork folder using the task-name slug (previously missed); reserved system folders `auth`, `sessions`, `skills`, `Tasks` are skipped
+1. **Each task is correlated with its credit cost.** Credits are **measured** live from the `/cost`
+   reading (e.g. *"556.1 credits used for this task so far."*) or **estimated** from inputs, outputs and
+   task category when no reading exists.
+2. **The estimator self-calibrates** to any measured values via a single global scale factor, so modeled
+   sessions track real spend.
+3. **New report section "Credits & ROI"** + two KPI tiles (Credits used, ROI) + a **Credits column** in
+   the work-by-process table, with a measured/estimated badge.
+4. **ROI = professional-services value ÷ credit cost** and recalculates live with the hourly-rate control.
 
-Each root is paginated and results are de-duplicated by folder id. v5.2 also documents the **chat-only limitation**: sessions that save no file leave no OneDrive trace, so the speed multiplier is a conservative baseline. The classify/compute/render scripts are unchanged. See [`skill/CHANGELOG-v5.md`](skill/CHANGELOG-v5.md) for full details.
+v10 also folds in the v6→v9 improvements (APQC-anchored business-process stamping, session-aware
+categories, and value pillars). See [`skill/CHANGELOG-v7.md`](skill/CHANGELOG-v7.md),
+[`skill/CHANGELOG-v6.md`](skill/CHANGELOG-v6.md) and [`skill/CHANGELOG-v5.md`](skill/CHANGELOG-v5.md).
 
 ---
 
@@ -53,14 +62,15 @@ See where your time went across 8 task categories, plus a breakdown of what you 
 
 ### Full Report Sections
 - **Hero** — speed multiplier (conservative/typical/optimistic) + professional-services value
-- **KPIs** — sessions, tasks, artifacts, active days, expert-equiv hours, hands-on hours
+- **KPIs** — sessions, tasks, active days, expert-equiv hours, hands-on hours, **credits used, ROI**
 - **By category** — research-anchored time-savings bars
 - **Analyzed → Produced** — sources in vs. deliverables out, with ingest/synthesize/author split
+- **Credits & ROI** — Copilot credits consumed + their $ cost, ROI on spend, net value, and credits by category
 - **Skills augmented** — professional roles Cowork covered for you
-- **Goals & leverage** — per-session goal with hours, value, and speed multiplier
+- **Work by business process** — each goal mapped to the business process it advanced, its category, project, assistance, **and the credits it cost**
 - **Activity heatmap** — day × hour collaboration pattern
 - **Methodology & glossary** — every band traceable, with clickable research sources
-- **Live hourly-rate control** — recalculates all dollar figures; speed multiplier is rate-independent
+- **Live hourly-rate control** — recalculates all dollar figures and ROI; speed multiplier and credit counts are rate-independent
 - **Download PDF** button
 
 ---
@@ -69,7 +79,7 @@ See where your time went across 8 task categories, plus a breakdown of what you 
 
 ### Option 1 — Let Cowork install it for you (easiest)
 
-1. **Download** the latest version: [`cowork-roi-report-skill-v5.2-latest.zip`](cowork-roi-report-skill-v5.2-latest.zip)
+1. **Download** the latest version: [`cowork-roi-report-skill-v10-latest.zip`](cowork-roi-report-skill-v10-latest.zip)
 2. **Open** [Copilot Cowork](https://copilot.cloud.microsoft/cowork)
 3. **Attach** the zip file to the chat and send this prompt:
 
@@ -80,7 +90,7 @@ See where your time went across 8 task categories, plus a breakdown of what you 
 
 ### Option 2 — Manual install
 
-1. **Download** the latest version: [`cowork-roi-report-skill-v5.2-latest.zip`](cowork-roi-report-skill-v5.2-latest.zip)
+1. **Download** the latest version: [`cowork-roi-report-skill-v10-latest.zip`](cowork-roi-report-skill-v10-latest.zip)
 2. **Extract** the zip
 3. **Copy** the `cowork-roi-report-skill/` folder to your Cowork skills directory:
    ```
@@ -106,8 +116,8 @@ The skill will:
 1. **Ask** which period to measure (7, 15, or 30 days) and whether to automate
 2. **Harvest** your Cowork session files from OneDrive
 3. **Classify** each session using the deterministic extension-based classifier
-4. **Compute** the two-clock model (expert clock vs. assisted clock)
-5. **Render** a beautiful HTML report
+4. **Compute** the two-clock model (expert clock vs. assisted clock) plus the credit/ROI model
+5. **Render** a beautiful HTML report with credits, ROI and the speed multiplier
 6. **Optionally automate** on a recurring schedule with email digest
 
 ---
@@ -124,7 +134,17 @@ The skill uses a **two-clock model** anchored in published research:
 ```
 speed_multiplier            = Σ expert_min / Σ assisted_min        (rate-independent)
 professional_services_value = (Σ expert_min / 60) × hourly_rate
+credit_cost                 = Σ credits × $0.01
+ROI                         = professional_services_value / credit_cost
 ```
+
+### Credits & ROI
+
+Each task is correlated with the **Copilot credits** it consumed. Credits are **measured** when a
+`/cost` reading was captured during the run (mined via `mine_session.py --credits`), and **estimated**
+otherwise — modeled from inputs, outputs and task category, then calibrated to any measured values with
+a single global scale factor (clamped 0.5×–2.0×). At $0.01/credit, the report shows the credit cost, the
+return on that spend, and net value. Treat estimated credits as directional.
 
 ### Research-anchored category bands (min saved / task)
 
@@ -149,11 +169,14 @@ Sources: Stanford-WB, Microsoft Research, NBER, Forrester — all clickable in t
 cowork-roi-report-skill/
 ├── SKILL.md              # Skill definition + workflow (loaded by Cowork)
 ├── README.md             # Technical documentation
-├── CHANGELOG-v5.md       # What changed in v5 and why
+├── CHANGELOG-v5.md       # Speed-multiplier / professional-services value (v5)
+├── CHANGELOG-v6.md       # Business-process stamping + session-aware categories (v6)
+├── CHANGELOG-v7.md       # Copilot Credits cost + ROI on spend (v7)
 ├── scripts/
-│   ├── mine_session.py   # Mines the live session transcript
+│   ├── mine_session.py   # Mines the live session transcript + /cost credits
 │   ├── classify.py       # Deterministic ext→category classifier
-│   ├── compute.py        # Applies the methodology → payload JSON
+│   ├── compute.py        # Applies the methodology + credit/ROI model → payload JSON
+│   ├── apqc_taxonomy.json # APQC-anchored business-process taxonomy
 │   └── build_report.py   # Renders the self-contained HTML report
 └── examples/
     ├── sample_sessions.json   # Synthetic input (safe to share)
@@ -167,6 +190,7 @@ No third-party dependencies — **standard-library Python 3 only**.
 ## Caveats
 
 - The **assisted clock is modeled**, not measured — OneDrive records artifacts, not keystroke time. Treat the multiplier as **directional**, not a stopwatch.
+- **Credits are measured only when a `/cost` reading was captured** during the run; otherwise they are modeled estimates calibrated to whatever measured values exist. Treat estimated credit costs as directional too.
 - Categories with **no saved artifacts** in the window report **zero** — keeping totals a conservative floor.
 - Counting stays conservative: ~2 run tasks per session; supporting files folded into the primary task.
 

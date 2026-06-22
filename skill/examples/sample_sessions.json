@@ -25,6 +25,7 @@
       "outputs": [
         {"name": "Quarterly_Review.pptx", "ext": "pptx"}
       ],
+      "credits": 556.1,
       "tasks": ["analysis", "document"]
     },
     {

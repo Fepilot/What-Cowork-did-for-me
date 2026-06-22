@@ -20,8 +20,26 @@ time + tool intensity for leverage instead of guessing from file timestamps.
 
 Usage: python mine_session.py --out working/session_telemetry.json
        (auto-detects the transcript; pass --transcript to override)
+
+To attach the EXACT credit cost, run `/cost` in the session, read the line
+("556.1 credits used for this task so far.") and pass it in:
+       python mine_session.py --cost-text "556.1 credits used for this task so far."
+   or  python mine_session.py --credits 556.1
+The captured `credits` is logged as a MEASURED value; future reports use it
+directly and calibrate the estimate for sessions that have no /cost reading.
 """
-import json, argparse, glob, os, datetime
+import json, argparse, glob, os, datetime, re
+
+def parse_cost_line(text):
+    """Extract the credit number from a /cost reply, e.g.
+    '556.1 credits used for this task so far.' -> 556.1"""
+    if not text: return None
+    m=re.search(r"([\d][\d,]*\.?\d*)\s*credits", text, re.IGNORECASE)
+    if not m:
+        m=re.search(r"([\d][\d,]*\.?\d*)", text)
+    if not m: return None
+    try: return float(m.group(1).replace(",",""))
+    except ValueError: return None
 
 def find_transcript():
     pats=["/mnt/workspace/agent-state/projects/*/*.jsonl",
@@ -42,7 +60,7 @@ def parse_ts(s):
     try: return datetime.datetime.fromisoformat(s.replace("Z","+00:00"))
     except Exception: return None
 
-def main(transcript, out):
+def main(transcript, out, credits=None):
     transcript=transcript or find_transcript()
     if not transcript or not os.path.exists(transcript):
         print("No transcript found"); return
@@ -88,11 +106,14 @@ def main(transcript, out):
         "turns": {"user": nuser, "assistant": nasst},
         "artifacts": sorted(artifacts),
         "produced_artifact": bool(artifacts),
+        "credits": credits,
+        "credits_source": ("measured" if credits is not None else None),
         "source": "session-transcript",
     }
     json.dump(rec, open(out,"w"), indent=1)
     print(f"Session {rec['id']}: exec={exec_min} min, {ntool} tool calls "
           f"({len(tools)} distinct), {len(artifacts)} artifact(s), "
+          f"{('%.1f credits' % credits) if credits is not None else 'credits n/a'}, "
           f"{'produced files' if artifacts else 'CHAT-ONLY'}.")
     print("wrote", out)
 
@@ -100,4 +121,10 @@ if __name__=="__main__":
     ap=argparse.ArgumentParser()
     ap.add_argument("--transcript", default=None)
     ap.add_argument("--out", default="working/session_telemetry.json")
-    a=ap.parse_args(); main(a.transcript,a.out)
+    ap.add_argument("--credits", type=float, default=None,
+                    help="exact credits from /cost (e.g. 556.1)")
+    ap.add_argument("--cost-text", default=None,
+                    help="raw /cost reply, e.g. '556.1 credits used for this task so far.'")
+    a=ap.parse_args()
+    cred=a.credits if a.credits is not None else parse_cost_line(a.cost_text)
+    main(a.transcript,a.out,cred)
