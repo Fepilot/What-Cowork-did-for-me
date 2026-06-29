@@ -6,19 +6,20 @@ description: |
   multiplier and a professional-services-equivalent value using research-anchored task-category bands plus an
   artifact-scaled two-clock model. The report has a live hourly-rate control, a Download-PDF button,
   an expandable Glossary with clickable research sources, KPIs, a category breakdown, an
-  analyzed-vs-produced (inputs/outputs) breakdown, skills-augmented, goals & leverage, and an activity heatmap.
+  analyzed-vs-produced (inputs/outputs) breakdown, skills-augmented, work-by-business-process table, and an activity heatmap.
   Inspired by microsoft/What-I-Did-Copilot, adapted for Copilot Cowork.
 
-  Use when the user asks for "my Cowork ROI", "what Cowork did for me", "Cowork impact report",
+  Use when the user asks to "generate my impact summary report", "generate my impact report",
+  "my impact summary", for "my Cowork ROI", "what Cowork did for me", "Cowork impact report",
   "Copilot Cowork ROI report", "how much time has Cowork saved me", "my Cowork value report",
-  or any request for a personal impact / ROI report on Copilot Cowork usage.
+  or any request for a personal impact / ROI / value report on Copilot Cowork usage.
   The skill asks which period to measure (7, 15 or 30 days) and whether to automate it on that cadence
   with an emailed digest (highlights + the HTML attached).
 
   Do NOT use for: GitHub Copilot / IDE reports, team-wide announcements, single-meeting summaries,
   or daily briefings.
 cowork:
-  category: analytics
+  category: analysis
   icon: BarChart4
 ---
 
@@ -58,31 +59,75 @@ This skill is generic — it works for **any** signed-in user. No data is hard-c
   - **Just run it once** (generate the report now, no automation)
   - **Run now & automate every N days, email me a digest** (N matches the period: 7→every 7 days, 15→every 15, 30→every 30; each run emails the highlights with the HTML attached)
 
-Do not proceed to scheduling until the user has explicitly chosen the automate option (the platform will also show its own approval dialog).
+Do not proceed to scheduling until the user has explicitly chosen the automate option in Q2 (the platform will also show its own approval dialog).
 
 ### 2. Resolve identity & dates
 - `GetMyDetails(select="mail,userPrincipalName,displayName")` → user name + email.
 - Compute `after` = N days ago at 00:00 local; `before` = today 23:59 local; set `window.label` = "Last N days", `window.months` = N/30 rounded (legacy field; v5 does not use seat cost).
 
 ### 3. Harvest the user's Cowork sessions (the data source)
-Cowork saves each session's workspace to OneDrive with `input/` (files brought in) and `output/`
-(deliverables produced) subfolders. There is no chat transcript in OneDrive — the artifacts are the signal.
+Cowork persists each session's workspace to OneDrive under the **`Documents/Cowork/`** store. There is no
+chat transcript in OneDrive — the artifacts are the signal. Over the product's life this store has used
+**three folder layouts** — harvest **all three**, because different users (and product versions) sit on
+different ones:
+- **Task folders** (current): `Documents/Cowork/Tasks/<goal-slug>-<YYYY-MM-DD>/` → `input/` + `output/`
+- **Root goal folders**: `Documents/Cowork/<goal-slug>-<YYYY-MM-DD>/` → `input/` + `output/`
+- **Legacy UUID sessions**: `Documents/Cowork/sessions/<session-uuid>/` → `input/` + `output/`
+
 - `GetDefaultDrive()` → personal OneDrive `drive_id`.
-- **Scan ALL THREE artifact roots under `Documents/Cowork/` — not just `sessions/`.** Sessions are written to more than one place, and skipping any root silently undercounts the user's work:
-  1. **`Documents/Cowork/sessions/<session-uuid>/`** — interactive sessions, named with a UUID.
-  2. **`Documents/Cowork/Tasks/<task-id>/`** — runs of **scheduled tasks**. Same `input/`+`output/` shape; these are NOT under `sessions/` and are easy to miss.
-  3. **`Documents/Cowork/<slug>/`** — sessions stored **directly** under the Cowork folder using the **task name as a slug** (e.g. `Build-AI-in-One-deck/`), NOT a UUID. To find these, list `Documents/Cowork/` itself and treat every child folder as a session root **except the reserved system folders** `auth`, `sessions`, `skills`, and `Tasks` (handled by roots 1–2 or holding no sessions). A folder qualifies as a session root when it contains an `input/` and/or `output/` subfolder.
-- For each root: `GetDriveChildren(drive_id, item_path="/Documents/Cowork/<root>", top=100)`. If `Documents/...` 404s, retry with `Documentos/...`, then bare `Cowork/...`. (The Cowork folder may be localized/renamed; if so, ask the user for its name once.) If a root (e.g. `Tasks/`) does not exist at all, skip it — its absence is not an error.
-- **Follow pagination on every root.** If the response includes `@odata.nextLink`/`next_link`, keep calling `GetDriveChildren(next_link=...)` until exhausted. A single page caps at ~20–100 folders; never assume page 1 is the full set or older in-window sessions will be silently dropped.
-- Keep session folders (from any root) whose `createdDateTime` or `lastModifiedDateTime` falls in the window. De-duplicate by folder id so a session reachable via more than one path is counted once.
-- For each kept session, `GetDriveChildren` into its `output/` (and `input/`) subfolders to collect artifact filenames, extensions **and per-file `createdDateTime`**. Run these lookups in parallel batches.
-- **Execution time (`exec_min`).** Estimate each session's run time as minutes from the session folder `createdDateTime` (start) to the **latest artifact `createdDateTime`** (end). Use `createdDateTime`, NOT `lastModifiedDateTime` — last-modified drifts whenever the user re-opens a file later (e.g. a deck created at 23:39 but edited two days on). Sessions with no output artifact have no reliable span → leave `exec_min` null.
-- **Keep output-less sessions.** A session folder with only `input/` (or empty) still counts — record it with empty `artifacts`; `classify.py` tags it `general` (conversational) so it is not dropped. **Folder-less chat sessions leave no OneDrive trace at all** — a daily briefing, inbox triage, or quick Q&A that saves no file writes nothing to `sessions/`, `Tasks/`, or a direct slug folder, so it cannot be recovered from OneDrive. This means the report is a **conservative baseline**: it counts the work that produced or consumed a saved artifact, and undercounts pure-chat work. See the telemetry note below for the forward fix.
-- **Live-session telemetry (richer signal).** The *currently running* session exposes its own transcript. Run `python scripts/mine_session.py --out working/session_telemetry.json` to capture REAL run time, tool-call counts and artifacts for this session, then append the record to a durable log (e.g. `Documents/Cowork/sessions/_telemetry.jsonl` in OneDrive). Over time this log lets the report include chat-only sessions and use measured run time + tool intensity for leverage instead of inferring from file timestamps. Past sessions ran in separate containers and are NOT readable from the current one — only the live session can be mined.
+- **Locate the Cowork folder — do NOT assume the exact name.** Commonly `Cowork`, but often suffixed or
+  localized (`Cowork 1`, `Cowork 2`, `Colaborar`, `Documentos/Cowork`, …). Resolve once:
+  1. Try `GetDriveChildren(drive_id, item_path="/Documents/Cowork")`.
+  2. On 404, **list `/Documents`** and pick the child whose name starts with `Cowork` (case-insensitive) —
+     prefer exact `Cowork`, else the highest-numbered `Cowork N`, else any `Cowork*`.
+  3. If still nothing, try the drive root `/Cowork`, then `/Documentos/Cowork`.
+  4. Only if all fail, ask the user for the folder name once.
+  Carry the resolved name forward for later writes (telemetry log) — never re-hardcode `Cowork`.
+- **Enumerate all three layouts** under the resolved Cowork folder: the `Tasks/` children, the root
+  goal-folder children, and the `sessions/` children. **Follow pagination** (`@odata.nextLink`/`next_link`)
+  to exhaustion in every listing — a single page caps at ~20–100 items.
+
+- **Allow-list, never deny-list — scope to what the Cowork app created.** Count a folder/artifact ONLY when
+  its `createdBy.application.id` is the **Cowork app id `6ab48b67-cd74-4ad4-81af-5932984589be`**. This is the
+  one robust, user-agnostic Cowork signal — the same product app id across users and tenants. Do **not** key
+  on store/folder *names*; those are instance-specific.
+- **NEVER enumerate `Documents/Apps/…`.** That tree (e.g. `Apps/M - Internal Copilot App 1/sessions/…`) is a
+  **different product — the M365 Copilot app running Scout** (scheduled heartbeats, customer/needs monitors,
+  executive briefings), written by the generic *Microsoft Graph* app (`99fa64eb-…`), **not Cowork**. Skipping
+  the `Apps/` tree entirely excludes Scout for **every** user with no per-instance name list to maintain. Do
+  **not** try to detect-and-subtract Scout by folder name — a deny-list is fragile and breaks on the next user.
+
+- Keep session folders whose `createdDateTime` or `lastModifiedDateTime` falls in the window.
+- For each kept session, `GetDriveChildren` into its `output/` (and `input/`) subfolders to collect artifact
+  filenames, extensions **and per-file `createdDateTime`**. Run these lookups in parallel batches.
+- **Counting discipline at harvest.** Task folders are **persistent workspaces** that accumulate artifacts
+  over multiple days/runs, so:
+  - **Do NOT derive `exec_min` from file-timestamp spans** for them — the span is days, not run time. Leave
+    `exec_min` null (the modeled assisted clock applies); prefer a measured telemetry `exec_min` when present.
+  - **Fold supporting files** (QA screenshots / `*.png`, variant `*-7day/-60d/-sample.html`, prompts, READMEs,
+    lock files) into the session's primary deliverable — never count 17 screenshots as 17 deliverables.
+- **Keep output-less sessions.** A folder with only `input/` (or empty) still counts — record empty
+  `outputs`; `classify.py` tags it `general` (conversational).
+- **Live-session telemetry (Stop hook).** `mine_session.py --log /mnt/user-config/.claude/cowork-session-telemetry.json`
+  upserts every session (id, measured `exec_min`, tool intensity, artifacts, `produced_artifact`) into a
+  durable log, so **chat-only / folder-less Cowork sessions self-record**. In the harvest, **read this log and
+  MERGE IN any session id not already covered by a Cowork folder** (`has_folder:false`, `outputs:[]`, telemetry
+  `exec_min`); for sessions in both, prefer the telemetry `exec_min` + `produced_artifact`. Builds forward only
+  — it cannot backfill sessions that predate the hook.
 
 ### 4. Classify each session into run tasks (the methodology)
 A **session** contains one or more **run tasks**; each run task maps to exactly one of the eight categories
 below.
+
+**Value model = RUNS × BAND (per the Cowork Time-Savings methodology deck).** Time saved = Σ over **runs**
+of each run's **category band** (minutes SAVED per run). Each band already sums the activity-instance chain
+inside ONE run (code 56 = write+test+debug = 18min×3; doc 24 = 6.1min×4 = draft→rewrite→format→polish), so
+you **count runs and multiply by the band** — never per-LOC, never a per-artifact authoring add-on (those
+double-count the chain that's already inside the band). **Count runs from the agentic tool-chains**, grounded
+in telemetry: a **code run ≈ 6 code-edit actions** (Edit/Write/MultiEdit), an **analysis run ≈ 5 research-tool
+calls** (search/list/read/query). `mine_session.py` writes these as a `runs:{category:count}` field per
+session; pass it through the harvest. Where a session has no telemetry, estimate runs conservatively from
+deliverables/iterations and label them as estimates. `compute.py` applies `Σ runs × CATS[band]`.
 
 **Use the deterministic classifier — do NOT hand-tag categories.** Write the harvested sessions (with
 `inputs`, `outputs` and `exec_min`) to `working/cowork_raw.json`, then run:
@@ -118,17 +163,68 @@ The raw harvest you write to `working/cowork_raw.json` (input to `classify.py`):
   "sessions": [ {"id":"<uuid8>","date":"YYYY-MM-DD","hour":<0-23>,
                  "goal":"<short verb-first phrase>",
                  "inputs":  [{"name":"report-1.pdf","ext":"pdf"}, ...],
-                 "outputs": [{"name":"deck.pptx","ext":"pptx"}, ...],
+                 "outputs": [{"name":"deck.pptx","ext":"pptx","skills":["Presentation Design","Data Analysis"]}, ...],
+                 "skills": ["Data Analysis"],
+                 "professional_roles": ["Data Analyst","Management Consultant"],
                  "has_folder":true, "exec_min":<measured minutes|null>}, ... ] }
 ```
 `classify.py` adds the `tasks` array (categories) and writes `working/cowork_sessions.json`. Where a live
 `session_telemetry.json` exists for a session, prefer its measured `exec_min`, tool counts and `produced_artifact`
 flag over the file-timestamp estimate.
 
+### 4a. Tag the skills behind each deliverable (populates "Skills augmented")
+
+**Required — without it the Skills-augmented and Deliverables tables render empty.** For each output
+(and each chat-only session) tag the **professional skills** Cowork exercised, drawn ONLY from the
+controlled vocabulary in `scripts/skills_vocabulary.json` (DOMAIN_SKILLS + TECH_SKILLS):
+- Write a `skills:[...]` array on each `outputs[]` item; for output-less / chat-only sessions, put a
+  session-level `skills:[...]`. `compute.py` rolls these up into the per-deliverable table; hours
+  follow the artifact they're tagged on.
+- **Also tag `professional_roles:[...]` per session** — the **1–2 roles a billing firm would charge**
+  for that work (e.g. *Data Analyst*, *Management Consultant*, *Software Engineer*, *Risk & Compliance
+  Analyst*). Name the **exact** role the task would have needed — use `scripts/roles_taxonomy.json` as a
+  guide but don't force-fit. These drive the **"Roles Cowork assembled for me"** section. If omitted,
+  `classify.py` falls back to keyword matching. *(Logic ported from microsoft/What-I-Did-Copilot.)*
+- **Tag conservatively, evidence-based — never invent a skill outside the vocabulary.** Infer from the
+  deliverable: a `.pptx` deck → *Presentation Design* (+ *Data Visualization* / *UX Design* if charts);
+  a `.docx` guide → *Technical Writing* / *Documentation*; a built skill / `.zip` → *System
+  Architecture* / *Prompt Engineering* / *Python*; an analytical `.xlsx` or report review → *Data
+  Analysis* / *Business Analysis*.
+- For **measured** (not inferred) skills, the live-session telemetry path (`mine_session.py` →
+  `_telemetry.jsonl`) supplies real per-session signals; past OneDrive-only sessions can only be
+  tagged by inference, so note that in the report.
+
+### 4b. Drive business process + value pillar (run the bundled map-my-work playbook inline)
+
+This step runs **automatically** as part of the report — no separate skill, no extra install. Follow
+the bundled playbook **[references/map-my-work-playbook.md](references/map-my-work-playbook.md)** to
+derive the **signed-in user's own** Jobs ▸ Business Processes ▸ Workflows from *their* M365 footprint,
+and tag each in-window session with its `process`, `pillar`, `job`, and `jtbd` (pillars via
+[references/value-pillars.md](references/value-pillars.md)). Nothing is hard-coded to any individual.
+
+1. **Derive the taxonomy inline** per the playbook, producing — **per in-window session** —
+   `{process, pillar, job, jtbd}`, personalized to whoever runs the report.
+2. **Write `scripts/process_overrides.json`** as a RICH map *before* running `classify.py`:
+   ```json
+   { "<session_id>": {"process":"…","pillar":"Revenue Growth|Cost Reduction|Risk Mitigation|Transformation","job":"…","jtbd":"…"} }
+   ```
+   `classify.py` uses these values **directly** (live, per-user) — `pillar_css` is derived from the
+   pillar name. A plain-string value (`{"<id>":"Process"}`) is still accepted for back-compat.
+3. The **work-by-business-process table bands by Job × Pillar** (e.g. "&lt;Job&gt; · &lt;Pillar&gt;"),
+   shows the process as a pill, and adds a **JTBD** sub-line per row.
+4. **Fallback (skip 4b):** if the playbook isn't run, `classify.py` classifies against the **generic
+   APQC** business-process taxonomy in `scripts/apqc_taxonomy.json` (Job = "Other", default pillar) —
+   the report still renders, just without the personalized Job/JTBD layer.
+
+The playbook is the single source of truth for process / pillar / job / JTBD naming. The taxonomy is
+**derived at run time for the user who runs the report** — nothing in this skill is specific to any
+individual.
+
 ### 5. Compute & render (bundled scripts — no hand arithmetic)
 - `python scripts/compute.py --in working/cowork_sessions.json --out working/cowork_roi_data.json`
 - `python scripts/build_report.py --data working/cowork_roi_data.json --out output/cowork-roi-report.html`
 - Verify: `Glob output/cowork-roi-report.html`. If missing, locate and move into `output/`.
+- **Run each pipeline script as its own command.** Do NOT append an inline schema-guessing inspection (e.g. a `python -c` that indexes keys you assume exist) to the same command — if the snippet's guess is wrong it exits non-zero and the *whole step shows as Failed* even though the script succeeded. Trust each script's own printed summary line; inspect output only with a separate, defensive read.
 
 (The scripts are in this skill's `scripts/` folder. `compute.py` holds the methodology bands; `build_report.py`
 is the renderer and embeds the glossary + clickable slide-12 sources.)

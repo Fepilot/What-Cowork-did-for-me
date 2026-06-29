@@ -1,176 +1,216 @@
 # Cowork ROI — Personal Impact Report (skill)
 
-Generates a Microsoft-branded **"What Cowork Did for Me"** single-file HTML report
-from a user's own Copilot Cowork session history in OneDrive. It quantifies the
-leverage Cowork provided as a **speed multiplier** and a **professional-services-equivalent
-value**, using an artifact-scaled time model anchored in published research.
+Generates a Microsoft-branded **"What Cowork Did for Me"** single-file HTML report from your own
+Copilot Cowork session history in OneDrive. It leads with **research-anchored Time Saved** and its
+**professional-services-equivalent Value**, then maps your work to your own Jobs, Business Processes,
+and the four Value Pillars.
 
-> **v5 update (June 2026):** the report now leads with a **speed multiplier** driven by the
-> number of distinct artifacts *analyzed* and *produced*, and frames value as a
-> **professional-services equivalent** at the user's chosen rate. The old ROI / Copilot-seat-cost
-> figure has been removed because credit & seat consumption isn't available. See
-> [`CHANGELOG-v5.md`](CHANGELOG-v5.md) for the full diff and rationale.
+> **v22:** removes the Copilot-credits feature (no credits question, no `/cost` browser sweep). The
+> report stays the **full, detailed personal impact report** — only credits are gone. See
+> [`CHANGELOG-v22.md`](CHANGELOG-v22.md).
+>
+> **v20:** value model is now **RUNS × BAND**, anchored to the Cowork Time-Savings methodology deck —
+> time saved = Σ runs × each run's category band (the band already contains the write→test→debug /
+> draft→rewrite→format→polish chain). Run counts come from the agentic tool-chains (telemetry-grounded:
+> ~6 code-edits/code-run, ~5 research-calls/analysis-run). No per-LOC, no authoring add-on. See
+> [`CHANGELOG-v20.md`](CHANGELOG-v20.md).
+>
+> **v19:** **real per-session cost** — the agent reads Cowork's `/cost` (Copilot Credits) by driving the
+> browser to the web app, screenshotting each session's "N credits used for this task so far," and logging
+> it to a durable ledger. The report gains a **"Credits · cost"** column (credits × **1¢/credit**, GA list).
+> No estimation — the number can't be recomputed without Microsoft's exact rate card, so it's read live.
+> Works whether you use the browser or the native Copilot app. See [`CHANGELOG-v19.md`](CHANGELOG-v19.md).
+>
+> **v18:** the harvest is now an **allow-list scoped to the Cowork app** — it reads **all three**
+> `Documents/Cowork/` layouts (`Tasks/<goal>-<date>/`, root `<goal>-<date>/`, and legacy
+> `sessions/<uuid>/`), counts only items created by the Cowork app id, and **never touches
+> `Documents/Apps/…`** — so **Scout** activity (M365 Copilot app heartbeats, monitors, executive
+> briefings) is excluded for every user with no per-instance name list. See
+> [`CHANGELOG-v18.md`](CHANGELOG-v18.md).
+>
+> **v15:** the expert clock is purely research-anchored — Time Saved = the **sum of the cited per-task
+> bands** (e.g. Analysis 67 + Document 24 = 91 min); the speed multiplier is a secondary stat. See
+> [`CHANGELOG-v15.md`](CHANGELOG-v15.md).
+
+---
+
+## Get Started in 4 Steps
+
+1. **Download** `cowork-roi-report-skill-v22.zip`. *(No need to unzip — attach it as-is.)*
+2. **Open** a new [Copilot Cowork](https://copilot.cloud.microsoft/cowork) session.
+3. **Click the ➕ (plus) symbol** to attach the zip file, then send: **Add this skill.**
+4. Once it's added, ask: **Generate my impact summary report.**
+
+You'll be asked which period to measure (7, 15 or 30 days), then the report is built. That's it. 🎉
 
 ---
 
 ## Contents
 
 ```
-cowork-roi-report-skill/
-├── SKILL.md              # skill definition + workflow (loaded by Cowork)
-├── README.md             # this file
-├── CHANGELOG-v5.md       # what changed in v5 and why
+cowork-roi-report/
+├── SKILL.md                     # skill definition + workflow (loaded by Cowork)
+├── README.md                    # this file
+├── CHANGELOG-v22.md             # latest — Copilot-credits feature removed (detailed report unchanged)
+├── CHANGELOG-v20.md             # value model = runs × band (methodology-deck-anchored)
+├── CHANGELOG-v19.md             # real /cost credits via browser sweep, Credits·cost column
+├── CHANGELOG-v18.md             # Cowork-app allow-list harvest, Scout excluded
+├── CHANGELOG-v15.md             # (+ v5/v6/v11/v13/v14/v15/v16 history)
 ├── scripts/
-│   ├── mine_session.py   # mines the live session transcript for measured run time + telemetry
-│   ├── classify.py       # deterministic ext->category classifier -> inputs/outputs schema
-│   ├── compute.py        # applies the methodology -> payload JSON
-│   └── build_report.py   # renders the self-contained HTML report
+│   ├── classify.py              # deterministic classifier → inputs/outputs + tasks schema
+│   ├── compute.py               # applies the methodology → payload JSON
+│   ├── build_report.py          # renders the self-contained HTML report
+│   ├── mine_session.py          # mines the live session transcript for real run-time (telemetry hook)
+│   ├── apqc_taxonomy.json       # generic APQC fallback business-process taxonomy
+│   └── skills_vocabulary.json   # controlled vocabulary for "skills augmented"
+├── references/
+│   ├── map-my-work-playbook.md  # derives your own Jobs ▸ Processes ▸ Workflows (run inline at step 4b)
+│   └── value-pillars.md         # the four-pillar crosswalk
 └── examples/
-    ├── sample_sessions.json   # synthetic input (safe to share)
-    └── sample-report.html     # rendered from the synthetic input
+    └── sample_sessions.json     # synthetic input (safe to share)
 ```
 
-## Install (personal skill)
-
-Drop the folder into the user's personal skills directory so Cowork picks it up:
-
-```
-<OneDrive>/Documents/Cowork/skills/cowork-roi-report/
-```
-
-(or, in a Cowork container, `/mnt/user-config/.claude/skills/cowork-roi-report/`).
-
-## Run the scripts directly
-
-```bash
-python scripts/compute.py     --in working/cowork_sessions.json --out working/cowork_roi_data.json
-python scripts/build_report.py --data working/cowork_roi_data.json --out output/cowork-roi-report.html
-```
-
-No third-party dependencies — standard-library Python 3 only.
+`map-my-work` is **folded in** as a reference playbook — there is no second skill to install, and it
+runs automatically when the report is generated.
 
 ---
 
-## Input schema (`cowork_sessions.json`)
+## What counts as Cowork activity (harvest scope, v18)
 
-The skill harvests Cowork session workspaces from OneDrive — scanning **all three artifact
-roots** under `Documents/Cowork/`, each with `input/` and `output/` subfolders:
+The report measures **only Cowork** work, by **allow-list** — not by trying to recognise and subtract
+everything else:
 
-| Root | Holds |
-|---|---|
-| `Documents/Cowork/sessions/<uuid>/` | Interactive sessions (UUID-named) |
-| `Documents/Cowork/Tasks/<task-id>/` | Runs of **scheduled tasks** |
-| `Documents/Cowork/<slug>/` | Sessions stored **directly** under Cowork, named with the task-name slug (not a UUID). The reserved folders `auth`, `sessions`, `skills`, `Tasks` are skipped. |
+- **Reads only `Documents/Cowork/`**, across **all three** folder layouts the product has used:
+  `Tasks/<goal>-<date>/`, root `<goal>-<date>/`, and legacy `sessions/<uuid>/` — each with `input/` +
+  `output/`.
+- **Counts only items created by the Cowork app** (`createdBy.application.id =
+  6ab48b67-cd74-4ad4-81af-5932984589be`) — the same product app id for every user and tenant, so it's a
+  robust signal that needs no per-user configuration.
+- **Never enumerates `Documents/Apps/…`.** That tree is the **M365 Copilot app running Scout** —
+  scheduled heartbeats, customer/needs monitors, and executive briefings (written by the generic
+  *Microsoft Graph* app). Those are **not Cowork** and are excluded automatically, with no instance-
+  specific name list to maintain.
 
-After de-duplicating by folder id and filtering to the window, it writes this:
-
-```jsonc
-{
-  "meta": {
-    "user": "Jane Doe",
-    "email": "jane@contoso.com",
-    "generated": "2026-06-08",
-    "window": { "from": "2026-04-09", "to": "2026-06-08", "label": "Last 60 days", "months": 2 },
-    "hourly_rate": 72
-  },
-  "sessions": [
-    {
-      "id": "8836abd1",
-      "date": "2026-04-27",
-      "hour": 12,                       // 0–23, user's local time
-      "goal": "Synthesize team deck from 8 reports",
-      "inputs":  [ {"name": "report-1.pdf", "ext": "pdf"}, ... ],   // analyzed
-      "outputs": [ {"name": "deck.pptx", "ext": "pptx"}, ... ],  // produced
-      "tasks":   ["analysis", "document"]                        // category keys
-    }
-  ]
-}
-```
-
-**New in v5:** sessions carry explicit `inputs` and `outputs` arrays (each with `ext`).
-The legacy single `artifacts` array still parses, but won't drive the artifact-scaled
-multiplier — re-harvest with `inputs`/`outputs` to benefit.
-
-### Task category keys
-`analysis · document · email · meeting · comms · special · code · general`
+Why allow-list, not deny-list: a "find Scout and remove it" rule keys on instance names like
+`M - Internal Copilot App 1`, which differ per user and break on the next account. Scoping *positively*
+to Cowork-app-created artifacts generalises cleanly.
 
 ---
 
-## Methodology — the two-clock model
+## What's in the report
 
-Each session is scored on two clocks; the ratio is the speed multiplier.
+- **Hero** — research-anchored **Time Saved** (conservative / typical / optimistic) + **Value**
+- **KPIs** — sessions, run tasks, deliverables, active days, expert-equivalent hours
+- **Value at a glance** — the four Value Pillars with example KPIs
+- **Work by business process** — an upfront **Job ▸ Business Process ▸ JTBD** visual, then a table you
+  can **toggle between Business Process and Job-to-be-Done** (banded by Job × Value Pillar; auto-hiding
+  **session-cost** column)
+- **Where the time went — by task category** — research-anchored bands
+- **Roles Cowork assembled for me** — the **exact professional roles a billing firm would charge** for
+  your work (Data Analyst, Management Consultant, Software Engineer, …), each **linked** to a job
+  search, with the expert-equivalent hours covered. *(Logic ported from microsoft/What-I-Did-Copilot:
+  LLM-tagged per session, 16-role keyword fallback.)*
+- **Deliverables & the skills behind them**
+- **Methodology & glossary** — every band traceable, with clickable research sources
 
-**Expert clock (unassisted)** — what a professional would take with no AI:
+## The four Value Pillars
+
+| Pillar | Type | Example KPI |
+|---|---|---|
+| **Revenue Growth** | Tangible · money coming in | Incremental gross revenue |
+| **Cost Reduction** | Tangible · money going out | Labor & budget savings |
+| **Risk Mitigation** | Intangible · money going out | Penalties & losses avoided |
+| **Transformation** | Intangible · money coming in | Adoption, decision quality, retention |
+
+Each session's process, pillar, job, and JTBD are **derived at run time from your own footprint** —
+nothing in this skill is specific to any individual. If the playbook isn't run, classification falls
+back to a generic APQC taxonomy (Job = "Other").
+
+---
+
+## Methodology — research-anchored time saved
+
+**Time Saved (expert-equivalent)** — what a professional would take with no AI — is simply the
+**sum of the research-anchored band for each task** in a session. Nothing else: no read-time or
+authoring assumptions, so every minute traces to a cited study.
 
 ```
-expert_min =  Σ analysis-band per analysis task        (research-anchored, v4)
-            + Σ general-band per general task
-            + Σ read_time(input)     ( 12 min / document,  5 min / image )
-            + Σ author_time(output)  ( deck 45 · doc 40 · sheet|page|code 35 · other 30 )
+time_saved_min = Σ CATS[task].typical        # e.g. Analysis (67) + Document (24) = 91 min
 ```
 
-`document` tasks contribute **only** through their output authoring time (so authoring is
-never double-counted with the analysis band).
+The **Conservative / Optimistic** range re-sums the published **low** / **high** band per task.
 
-**Assisted clock (your time)** — a modeled estimate of hands-on effort:
-
-```
-assisted_min = 8  (fixed prompt/setup)  +  2 × (num inputs + num outputs)     (floor 4)
-```
-
-**Headline metrics:**
+**Headline (both fully research-anchored):**
 
 ```
-speed_multiplier            = Σ expert_min / Σ assisted_min          (rate-independent)
-professional_services_value = (Σ expert_min / 60) × hourly_rate
+Time Saved (hours) = Σ time_saved_min / 60
+Value              = Time Saved hours × hourly_rate
 ```
 
-**Conservative / Optimistic range** re-runs the expert clock with the published floor/ceiling
-analysis bands and lighter/heavier read & authoring weights.
+**Speed multiplier (secondary, directional).** Dividing Time Saved by a *modeled* hands-on clock
+gives a speed multiplier. The assisted clock is the one non-research input — OneDrive can't measure
+keystroke time — so the multiplier is directional, not a stopwatch (it is *measured* for sessions
+where the telemetry hook is enabled):
+
+```
+assisted_min     = 8 (prompt/setup) + 2 × (num inputs + outputs)   ·  floor 4   [modeled]
+speed_multiplier = Σ time_saved_min / Σ assisted_min               (rate-independent · secondary)
+```
 
 ### Research-anchored category bands (min saved / task)
 
 | Category | Low | **Typical** | High |
 |---|---:|---:|---:|
-| Analysis & Research | 30 | **71** | 92 |
+| Analysis & Research | 30 | **67** | 92 |
 | Document & content creation | 12 | **24** | 42 |
 | Email workflows | 3 | **7** | 12 |
-| Meeting workflows | 12 | **31** | 45 |
-| Communication workflows | 2 | **4** | 6 |
+| Meeting workflows | 12 | **31** | 43 |
+| Communication workflows | 2 | **4** | 11 |
 | Specialized workflows | 10 | **25** | 40 |
 | Write or debug code | 30 | **56** | 96 |
 | General assistance / Other | 2 | **5** | 8 |
 
-Full source citations (Stanford-WB, Microsoft Research, NBER, Forrester, etc.) are embedded
-in the report's Glossary and in `build_report.py`.
+Full source citations (Stanford-WB, Microsoft Research, NBER, Forrester, etc.) are embedded in the
+report's Glossary and in `build_report.py`.
 
 ---
 
-## Output (HTML report sections)
+## Optional hook — capture chat-only sessions automatically
 
-- **Hero** — speed multiplier (conservative/typical/optimistic) + professional-services value
-- **KPIs** — sessions, run tasks, artifacts, active days, expert-equiv hours, speed multiplier, hands-on hours
-- **By category** — where the expert-equivalent time went (research-anchored bars)
-- **Analyzed → Produced** — sources you fed in (by type) vs. deliverables produced (by type), with the ingest-vs-author time split (the consume/produce shape of your leverage)
-- **Skills augmented** roles
-- **Goals & leverage** — per-session goal with hours, value, and speed multiplier
-- **Activity heatmap** (day × hour)
-- **Methodology & glossary** — every band traceable, with clickable research sources
-- A **live hourly-rate control** recalculates all dollar figures; the speed multiplier is rate-independent
+A `settings.json` hook enriches the report over time (forward-looking — it can't backfill past
+sessions). Wire it once, then activate by opening `/hooks` or restarting:
+
+- **Stop hook → `mine_session.py --log …cowork-session-telemetry.json`** records every session
+  (run-time, tools, artifacts, `produced_artifact`) so **chat-only / folder-less sessions are
+  counted**, not just those that saved a file.
+
+Only the *live* session is minable, so the log builds forward as you use Cowork.
+
+---
+
+## Run the scripts directly (dev)
+
+```bash
+python scripts/classify.py     --in working/cowork_raw.json      --out working/cowork_sessions.json
+python scripts/compute.py      --in working/cowork_sessions.json --out working/cowork_roi_data.json
+python scripts/build_report.py --data working/cowork_roi_data.json --out output/cowork-roi-report.html
+```
+
+No third-party dependencies — standard-library Python 3 only.
+
+### Input schema (`cowork_sessions.json`)
+
+Each session carries `inputs`/`outputs` (each with `ext` and optional `skills`), `tasks` (category
+keys), and — when the map-my-work playbook runs — `process`, `value_pillar`, `job`, and `jtbd`.
+Task category keys: `analysis · document · email · meeting · comms · special · code · general`.
 
 ---
 
 ## Caveats (state these in any readout)
 
-- The **assisted clock is modeled**, not measured — OneDrive records artifacts, not keystroke time.
-  Treat the multiplier as **directional**, not a stopwatch.
-- Categories with **no saved artifacts** in the window are reported as **zero**, keeping totals a
-  conservative floor.
-- Counting stays conservative: ~2 run tasks per session; supporting files folded into the primary task.
-- **Chat-only sessions are invisible (known limitation).** Daily briefings, inbox triage, quick
-  lookups and other conversational sessions that save no file leave **no trace in OneDrive** —
-  nothing is written to `sessions/`, `Tasks/`, or a direct slug folder. They therefore can't be
-  counted from artifacts, so **the speed multiplier and value are a conservative baseline** that
-  reflects only artifact-producing/consuming work. The `mine_session.py` telemetry path
-  (`_telemetry.jsonl`) is the forward fix: as it accumulates measured run-time and tool-intensity
-  records, future reports can include chat-only sessions and tighten the multiplier.
+- **Time Saved & Value are research-anchored** (cited per-task bands). The **speed multiplier's**
+  assisted clock is a **modeled** estimate (measured where the telemetry hook is on), so treat the
+  multiplier as directional.
+- Categories with **no tasks** in the window are reported as **zero**, keeping totals a conservative floor.
+- Counting stays conservative: supporting files are folded into the primary task.
+- Everything is **derived per user at run time** — nothing in the skill is specific to any individual.
